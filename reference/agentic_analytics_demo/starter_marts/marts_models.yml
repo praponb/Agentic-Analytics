@@ -1,0 +1,70 @@
+version: 2
+
+models:
+  - name: dim_sales_rep
+    description: "Sales rep dimension (one row per rep)"
+    columns:
+      - name: rep_id
+        description: "Sales rep business key"
+        data_tests: [unique, not_null]
+      - name: rep_name
+        description: "Sales rep display name"
+        data_tests: [not_null]
+
+  - name: dim_course
+    description: "Course dimension (one row per course)"
+    columns:
+      - name: course_id
+        description: "md5 of the lower-cased, trimmed course name"
+        data_tests: [unique, not_null]
+      - name: course_name
+        description: "Course display name"
+        data_tests: [not_null]
+
+  - name: fact_sales
+    description: "Sales transactions (grain: one row per order line). Amounts in THB, no discounts modelled."
+    columns:
+      - name: order_id
+        description: "Order identifier"
+        data_tests: [unique, not_null]
+      - name: date_key
+        description: "FK to dim_date (YYYYMMDD)"
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: rep_id
+        description: "FK to dim_sales_rep"
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_sales_rep')
+              field: rep_id
+      - name: course_id
+        description: "FK to dim_course"
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_course')
+              field: course_id
+      - name: amount
+        description: "Order line revenue in THB (quantity x unit_price)"
+        data_tests: [not_null]
+
+  - name: fact_sales_target
+    description: "Annual sales target per rep and fiscal year (THB)"
+    columns:
+      - name: target_id
+        description: "rep_id-fiscal_year"
+        data_tests: [unique, not_null]
+      - name: rep_id
+        description: "FK to dim_sales_rep"
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_sales_rep')
+              field: rep_id
+      - name: fiscal_year
+        description: "Fiscal year (same naming convention as dim_date.fiscal_year)"
+        data_tests: [not_null]

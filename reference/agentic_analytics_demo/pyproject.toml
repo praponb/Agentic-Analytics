@@ -1,0 +1,27 @@
+[project]
+name = "agentic-analytics-demo"
+version = "1.1.0"
+description = "Open-source Agentic Analytics pipeline with dbt, DuckDB, and FastMCP"
+# Verified on Python 3.12. Widen only after running the test suite on the new version.
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "dbt-core>=1.8.0,<2.0.0",
+    "dbt-duckdb>=1.8.0,<2.0.0",
+    # >=1.3: allowed_directories sandbox works with relative data_lake/ paths (1.1 lacks it, 1.2 blocks valid reads)
+    "duckdb>=1.3.0,<3.0.0",
+    # mcp 2.x removed mcp.server.fastmcp (renamed to MCPServer); this server targets the 1.x API
+    "mcp[cli]>=1.2.0,<2.0.0",
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.uv]
+# This is an application, not an installable package (avoids setuptools flat-layout errors).
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

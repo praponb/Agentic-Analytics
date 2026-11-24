@@ -1,0 +1,114 @@
+cubes:
+  - name: Sales
+    sql_table: marts.fact_sales
+    description: "Sales transactions (grain: one row per order line)"
+
+    joins:
+      - name: SalesReps
+        sql: "{CUBE}.rep_id = {SalesReps}.rep_id"
+        relationship: many_to_one
+
+      - name: Courses
+        sql: "{CUBE}.course_id = {Courses}.course_id"
+        relationship: many_to_one
+
+    measures:
+      - name: total_revenue
+        sql: amount
+        type: sum
+        title: "Total Revenue (THB)"
+        description: "Order line revenue in Thai Baht (quantity x unit price; discounts are not modelled)"
+
+      - name: order_count
+        sql: order_id
+        type: count_distinct
+        title: "Order Count"
+
+      - name: total_quantity
+        sql: quantity
+        type: sum
+        title: "Seats / Units Sold"
+
+    dimensions:
+      - name: order_id
+        sql: order_id
+        type: string
+        primary_key: true
+        public: true
+
+      - name: sale_date
+        sql: sale_date
+        type: time
+        title: "Sale Date"
+
+      - name: rep_id
+        sql: rep_id
+        type: string
+        description: "Sales rep key (row-level security filter)"
+
+      - name: region
+        sql: region
+        type: string
+
+      - name: channel_type
+        sql: channel_type
+        type: string
+        description: "Training delivery channel: Public (individual seats), In-house (corporate), or Hybrid"
+
+  - name: SalesReps
+    sql_table: marts.dim_sales_rep
+    description: "Sales rep dimension"
+
+    dimensions:
+      - name: rep_id
+        sql: rep_id
+        type: string
+        primary_key: true
+        public: true
+
+      - name: rep_name
+        sql: rep_name
+        type: string
+
+  - name: Courses
+    sql_table: marts.dim_course
+    description: "Course dimension"
+
+    dimensions:
+      - name: course_id
+        sql: course_id
+        type: string
+        primary_key: true
+
+      - name: course_name
+        sql: course_name
+        type: string
+
+  - name: SalesTargets
+    sql_table: marts.fact_sales_target
+    description: "Annual sales target per rep and fiscal year (THB)"
+
+    joins:
+      - name: SalesReps
+        sql: "{CUBE}.rep_id = {SalesReps}.rep_id"
+        relationship: many_to_one
+
+    measures:
+      - name: annual_target
+        sql: annual_target
+        type: sum
+        title: "Annual Target (THB)"
+
+    dimensions:
+      - name: target_id
+        sql: target_id
+        type: string
+        primary_key: true
+
+      - name: rep_id
+        sql: rep_id
+        type: string
+
+      - name: fiscal_year
+        sql: fiscal_year
+        type: number

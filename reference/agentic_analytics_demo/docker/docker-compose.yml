@@ -1,0 +1,95 @@
+name: agentic-analytics
+
+# Secrets come from docker/.env (copy .env.example). Ports bind to 127.0.0.1 only.
+# Data path: dbt builds marts in DuckDB -> scripts/publish_marts_to_postgres.py -> Postgres
+# -> Cube (semantic layer + RLS) -> Metabase (connect it to Cube's SQL API to inherit RLS).
+
+services:
+  postgres:
+    image: postgres:16.16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in docker/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in docker/.env}
+      POSTGRES_DB: warehouse
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d warehouse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Idempotent: creates Metabase's application database on every `up` if it is missing
+  # (an /docker-entrypoint-initdb.d script would only run on a brand-new volume).
+  db-init:
+    image: postgres:16.16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: warehouse
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname = 'metabase_app'" | grep -q 1
+        || psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE metabase_app"
+    restart: "no"
+
+  cube:
+    image: cubejs/cube:v1.8.32
+    ports:
+      - "127.0.0.1:4000:4000"     # REST / GraphQL / Playground (dev mode)
+      - "127.0.0.1:15432:15432"   # Postgres-compatible SQL API
+    environment:
+      CUBEJS_DEV_MODE: ${CUBEJS_DEV_MODE:-true}
+      CUBEJS_DB_TYPE: postgres
+      CUBEJS_DB_HOST: postgres
+      CUBEJS_DB_PORT: "5432"
+      CUBEJS_DB_NAME: warehouse
+      CUBEJS_DB_USER: ${POSTGRES_USER}
+      CUBEJS_DB_PASS: ${POSTGRES_PASSWORD}
+      CUBEJS_API_SECRET: ${CUBEJS_API_SECRET:?set CUBEJS_API_SECRET in docker/.env}
+      CUBEJS_PG_SQL_PORT: "15432"  # the SQL API is only enabled when this is set
+      CUBE_SQL_USERS: ${CUBE_SQL_USERS:?set CUBE_SQL_USERS in docker/.env}
+      # Cache and query queue. Required when CUBEJS_DEV_MODE=false; also keeps dev mode from
+      # starting an embedded Cube Store that writes into ./cube_schema/.cubestore.
+      CUBEJS_CUBESTORE_HOST: cubestore
+    volumes:
+      - ./cube_schema:/cube/conf
+    depends_on:
+      postgres:
+        condition: service_healthy
+      cubestore:
+        condition: service_started
+
+  # Single-node Cube Store (cache + queue). Internal only: no ports published to the host.
+  cubestore:
+    image: cubejs/cubestore:v1.8.32
+    environment:
+      CUBESTORE_REMOTE_DIR: /cube/data
+    volumes:
+      - cube_store:/cube/data
+
+  metabase:
+    image: metabase/metabase:v0.65.6.3
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase_app
+      MB_DB_PORT: "5432"
+      MB_DB_USER: ${POSTGRES_USER}
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
+      MB_DB_HOST: postgres
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
+volumes:
+  pg_data:
+  cube_store:
