@@ -61,3 +61,7 @@ See Section 11 of the spec. The main ones:
 - DuckDB allows only one writing process at a time.
 - Lake CSV files must be UTF-8.
 - Cube's SQL API cannot run every SQL shape.
+
+## License
+
+[MIT](LICENSE)
