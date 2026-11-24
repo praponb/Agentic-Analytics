@@ -1,0 +1,27 @@
+# Repo-wide ignores. The reference project has its own .gitignore for its
+# build outputs (reference/agentic_analytics_demo/.gitignore).
+
+# macOS / Windows
+.DS_Store
+Thumbs.db
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.swp
+
+# Office lock files (created while a .docx is open)
+~$*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Local secrets and per-machine config
+.env
+.mcp.json
+
+# Claude Code per-user settings
+.claude/settings.local.json
