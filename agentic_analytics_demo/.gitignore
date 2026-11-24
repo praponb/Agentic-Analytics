@@ -12,3 +12,5 @@ docker/.env
 .mcp.json
 docker/cube_schema/.cubestore/
 .user.yml
+deploy/.env
+deploy/cloudflared/*.json

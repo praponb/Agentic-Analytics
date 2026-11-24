@@ -49,7 +49,7 @@ uv run python scripts/check_enterprise_stack.py     # expect "ALL CHECKS PASSED"
 
 Services listen on `127.0.0.1` only: Metabase on port 3000, Cube on 4000 (REST and Playground) and 15432 (SQL API).
 
-## Local sales dashboard (agentic-dashboard.praponb.com, local preview)
+## Sales dashboard (https://agentic-dashboard.praponb.com)
 
 A small Streamlit app in [`agentic_analytics_demo/dashboard/`](agentic_analytics_demo/dashboard/) that reads the dbt marts in `warehouse.duckdb` directly. No Docker needed.
 
@@ -62,7 +62,41 @@ uv run --group dashboard streamlit run dashboard/app.py    # then open http://lo
 - **Shows:** revenue, orders, seats, target and % of target; actual vs. target by rep; revenue by month across the fiscal year (October to September); revenue by course, region and channel; the order lines, with a CSV download.
 - **Filters:** fiscal year (defaults to the latest finished one), sales rep, region, channel and course. Targets exist per rep and fiscal year, so the target figures ignore the region, channel and course filters.
 - **Data:** each refresh opens `warehouse.duckdb` read-only for a moment, so it doesn't block `dbt` runs. If a writer holds the file, the page says so; refresh once it's done. Set `DASHBOARD_DUCKDB_PATH` to read another warehouse file.
-- **Security:** no row-level security. Everyone who can open the page sees every row, so it listens on `127.0.0.1` only (`.streamlit/config.toml`). Use Metabase via Cube for per-user dashboards. Publishing it at agentic-dashboard.praponb.com would need hosting and a login in front of it.
+- **Security:** no row-level security. Everyone who can open the page sees every row, so locally it listens on `127.0.0.1` only (`.streamlit/config.toml`), and the hosted copy sits behind a Cloudflare Access login. Use Metabase via Cube for per-user dashboards.
+
+### Hosting
+
+The hosted copy runs on the Ubuntu server `192.168.1.49` as the Docker Compose project `agentic-dashboard` (in `~/agentic-dashboard`). Nothing listens on a public port: a dedicated Cloudflare Tunnel carries the traffic.
+
+```
+browser ─► Cloudflare Access (login: "Owner only" policy) ─► Tunnel "agentic-dashboard" ─► tunnel container ─► dashboard:8501
+```
+
+- **Image:** [`Dockerfile.dashboard`](agentic_analytics_demo/Dockerfile.dashboard). Its build stage generates the mock lake and runs `dbt build`, so **a failing dbt test fails the deploy**. The runtime stage runs Streamlit as a non-root user on a read-only filesystem with only `warehouse.duckdb`.
+- **Compose:** [`deploy/docker-compose.yml`](agentic_analytics_demo/deploy/docker-compose.yml), with the `dashboard` and `tunnel` services. The dashboard is also on `127.0.0.1:8502` on the server for checks, because 8501 is taken there.
+- **Tunnel:** [`deploy/cloudflared/config.yml`](agentic_analytics_demo/deploy/cloudflared/config.yml). The credentials file `deploy/cloudflared/<tunnel-id>.json` is git-ignored. `deploy.sh` copies it to the server with mode 600.
+- **DNS:** a proxied CNAME `agentic-dashboard` → `<tunnel-id>.cfargotunnel.com` in the `praponb.com` zone.
+- **Login:** Cloudflare Zero Trust → Access → Applications → `agentic-dashboard`, using the reusable "Owner only" policy.
+
+Deploy or update from the Mac (copies the project, rebuilds the image, restarts, waits for healthy):
+
+```bash
+agentic_analytics_demo/deploy/deploy.sh                 # DEPLOY_HOST=user@host to override
+```
+
+Operate on the server:
+
+```bash
+cd ~/agentic-dashboard/deploy
+docker compose ps                     # both services up, dashboard (healthy)
+docker compose logs -f tunnel         # "Registered tunnel connection" x4
+curl -s 127.0.0.1:8502/_stcore/health # ok
+docker compose down                   # take the site offline (Access still blocks the hostname)
+```
+
+Remove completely: `docker compose down --rmi local` on the server, then delete the DNS record and the Access application in Cloudflare, and run `cloudflared tunnel delete agentic-dashboard` on the Mac.
+
+> **Gotcha:** if `~/.cloudflared/config.yml` names another tunnel, `cloudflared tunnel route dns <name> <host>` routes to **that** tunnel. Pass the config explicitly: `cloudflared tunnel --config agentic_analytics_demo/deploy/cloudflared/config.yml route dns --overwrite-dns <tunnel-id> agentic-dashboard.praponb.com`.
 
 ## Continuous integration
 
@@ -70,6 +104,7 @@ uv run --group dashboard streamlit run dashboard/app.py    # then open http://lo
 - **pytest:** the full suite on Ubuntu with Python 3.12 + DuckDB 2.0.1, 1.4.4 and 1.3.2, and Python 3.11 + DuckDB 2.0.1.
 - **Docker stack (static):** `docker compose config` and the `cube.js` row-level security unit checks. CI does not start the containers; run `scripts/check_enterprise_stack.py` locally for the live check.
 - **Dashboard:** `agentic_analytics_demo/tests/test_dashboard.py` (8 tests: figures, filters, fiscal months, missing or locked warehouse, the app rendering headless).
+- **Dashboard image:** builds `Dockerfile.dashboard` (including `dbt build`) and checks that the container starts healthy, without the tunnel.
 
 ## Security in one paragraph
 

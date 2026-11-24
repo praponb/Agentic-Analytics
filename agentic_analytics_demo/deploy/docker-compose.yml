@@ -1,0 +1,38 @@
+name: agentic-dashboard
+
+# Sales dashboard at https://agentic-dashboard.praponb.com
+#   dashboard: Streamlit (image builds the warehouse with dbt; see ../Dockerfile.dashboard)
+#   tunnel:    dedicated Cloudflare Tunnel -> http://dashboard:8501 (no inbound ports needed)
+# Cloudflare Access (login) protects the hostname; the app itself has no row-level security.
+# Deploy from the Mac with deploy/deploy.sh. deploy/.env holds HOST_UID/HOST_GID (written by it).
+
+services:
+  dashboard:
+    build:
+      context: ..
+      dockerfile: Dockerfile.dashboard
+    image: agentic-dashboard:latest
+    ports:
+      - "127.0.0.1:8502:8501"   # on-server checks only (8501 is used by another app)
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.0
+    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
+    user: "${HOST_UID:?run deploy/deploy.sh}:${HOST_GID:?run deploy/deploy.sh}"  # reads the 600-mode credentials file
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    restart: unless-stopped

@@ -1,0 +1,12 @@
+# Cloudflare Tunnel "agentic-dashboard" (runs in the `tunnel` service of deploy/docker-compose.yml).
+# The tunnel ID is not a secret. The credentials file <ID>.json is git-ignored and copied to
+# the server by deploy/deploy.sh with mode 600.
+# Cloudflare Access app "agentic-dashboard" (policy "Owner only") protects this hostname.
+tunnel: f0316847-fd31-462f-9306-4f0dfb354175
+credentials-file: /etc/cloudflared/f0316847-fd31-462f-9306-4f0dfb354175.json
+no-autoupdate: true
+
+ingress:
+  - hostname: agentic-dashboard.praponb.com
+    service: http://dashboard:8501
+  - service: http_status:404

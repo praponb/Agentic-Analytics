@@ -1,11 +1,13 @@
-"""Local sales dashboard (agentic-dashboard.praponb.com, local preview).
+"""Sales dashboard (hosted at https://agentic-dashboard.praponb.com behind Cloudflare Access).
 
-Run from the project root:
+Run locally from the project root:
     uv sync --group dashboard
     uv run --group dashboard streamlit run dashboard/app.py
 
-Listens on http://127.0.0.1:8501 only (see .streamlit/config.toml): it shows every row in
-the warehouse, with no row-level security. For per-user dashboards use Metabase via Cube.
+Locally it listens on http://127.0.0.1:8501 only (see .streamlit/config.toml); the hosted copy
+(Dockerfile.dashboard, deploy/) is reachable only through a Cloudflare Access login. It shows
+every row in the warehouse, with no row-level security. For per-user dashboards use Metabase
+via Cube.
 """
 
 from __future__ import annotations
@@ -205,5 +207,5 @@ st.download_button(
 updated = datetime.fromtimestamp(path.stat().st_mtime).astimezone()
 st.caption(
     f"Data: {path.name}, last built {updated:%Y-%m-%d %H:%M %Z}. "
-    "No row-level security: this page shows every row, so it only listens on 127.0.0.1."
+    "No row-level security: this page shows every row, so keep it on 127.0.0.1 or behind a login."
 )

@@ -103,3 +103,34 @@ jobs:
 
       - name: Run dashboard tests
         run: uv run --no-sync pytest tests/test_dashboard.py -v -p no:cacheprovider
+
+  dashboard-image:
+    # The hosted dashboard image (agentic-dashboard.praponb.com). The build runs `dbt build`,
+    # so this also fails on a broken model or dbt test. The tunnel is not started in CI.
+    name: Dashboard image (build + health)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: agentic_analytics_demo
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Build image (runs dbt build)
+        run: docker build -f Dockerfile.dashboard -t agentic-dashboard:ci .
+
+      - name: Start container and wait for healthy
+        run: |
+          docker run -d --name dash --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges:true -p 127.0.0.1:8502:8501 agentic-dashboard:ci
+          for i in $(seq 1 30); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' dash)
+            [ "$status" = healthy ] && break
+            sleep 2
+          done
+          docker ps -a --filter name=dash --format '{{.Names}}: {{.Status}}'
+          test "$(curl -s http://127.0.0.1:8502/_stcore/health)" = ok
+
+      - name: Container logs
+        if: always()
+        run: docker logs dash 2>&1 | tail -40 || true
