@@ -1,0 +1,12 @@
+# Streamlit settings for dashboard/app.py (read when you run streamlit from the project root).
+[server]
+address = "127.0.0.1"   # local only: the dashboard has no row-level security
+port = 8501
+headless = true
+
+[browser]
+gatherUsageStats = false
+serverAddress = "localhost"
+
+[client]
+toolbarMode = "viewer"   # hide Streamlit's Deploy button and developer menu items
