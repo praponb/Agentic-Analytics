@@ -138,6 +138,20 @@ def test_fy2026_actual_vs_target(m, built):
     assert q["success"] and q["row_count"] == 4, q
 
 
+def test_decimal_results_are_json_numbers(m, built):
+    q = _j(m.query_duckdb(
+        "SELECT SUM(amount) AS total, CAST(1.10 AS DECIMAL(10, 2)) AS small, "
+        "CAST('12345678901234567890.12' AS DECIMAL(38, 2)) AS big, DATE '2026-01-31' AS day "
+        "FROM marts.fact_sales"
+    ))
+    assert q["success"], q
+    row = q["rows"][0]
+    assert isinstance(row["total"], float) and row["total"] > 0, row
+    assert row["small"] == 1.1
+    assert row["big"] == "12345678901234567890.12"  # a float would lose digits: stays exact text
+    assert row["day"] == "2026-01-31"
+
+
 def test_fiscal_year_boundaries(m, built):
     q = _j(m.query_duckdb(
         "SELECT date_day::varchar AS d, fiscal_year, fiscal_quarter, fiscal_month_number "

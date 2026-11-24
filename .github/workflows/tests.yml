@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   core:
-    # dbt + DuckDB + MCP server: the 46-test pytest suite (tests/test_mcp_server.py).
+    # dbt + DuckDB + MCP server: the 47-test pytest suite (tests/test_mcp_server.py).
     # The suite copies the project to a temp dir and generates its own sample data.
     name: pytest (Python ${{ matrix.python }}, DuckDB ${{ matrix.duckdb }})
     runs-on: ubuntu-latest

@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 
@@ -100,8 +101,25 @@ UNSAFE_LAKE_PATH_CHARS = set("'{}")
 # ------------------------------------------------------------------------------
 # Generic helpers
 # ------------------------------------------------------------------------------
+def _json_default(value: Any) -> Any:
+    """JSON fallback for values json can't encode (DECIMAL, DATE, TIMESTAMP, UUID, ...).
+
+    DuckDB returns DECIMAL (e.g. SUM of a DECIMAL column) as Decimal. It becomes a JSON number
+    when a float holds it exactly, so clients get numbers like they do for DOUBLE columns; a
+    value that would lose digits as a float (e.g. DECIMAL(38,2) totals) stays an exact string.
+    Everything else is rendered with str().
+    """
+    if isinstance(value, Decimal):
+        if value.is_finite():
+            as_float = float(value)
+            if Decimal(repr(as_float)) == value:
+                return as_float
+        return str(value)
+    return str(value)
+
+
 def _json(payload: Any) -> str:
-    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default)
 
 
 def _sql_str(value: str) -> str:

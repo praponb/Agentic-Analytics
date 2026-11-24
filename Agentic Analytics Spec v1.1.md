@@ -11,7 +11,7 @@
 >
 > | Part | Status |
 > |---|---|
-> | Local core (dbt + DuckDB + MCP server, Sections 4–6) | **Tested.** `pytest` 46/46 on DuckDB 2.0.1, 1.4.4 and 1.3.2 (Python 3.12.13, dbt-core 1.12.7, dbt-duckdb 1.11.1, mcp 1.30.0); `dbt build` 66/66; MCP protocol tested over STDIO with a real client. |
+> | Local core (dbt + DuckDB + MCP server, Sections 4–6) | **Tested.** `pytest` 47/47 on DuckDB 2.0.1, 1.4.4 and 1.3.2 with Python 3.12.13, and on Python 3.11.15 (dbt-core 1.12.7, dbt-duckdb 1.11.1, mcp 1.30.0), locally and in GitHub Actions; `dbt build` 66/66; MCP protocol tested over STDIO with a real client. |
 > | Execution checklist (Section 10) | **Tested** end to end in a fresh copy. |
 > | Enterprise Docker stack (Section 7) | **Tested live** on Docker 29.9.3 (Postgres 16.16, Cube v1.8.32 + Cube Store, Metabase v0.65.6.3), from empty volumes, with `CUBEJS_DEV_MODE` both `true` and `false`: marts published to Postgres; RLS checked over Cube REST (JWT) and the SQL API; Metabase connected to the SQL API with native SQL and GUI questions filtered per user. `scripts/check_enterprise_stack.py` reproduces these checks. |
 
@@ -41,6 +41,11 @@
 - `cube.js` crashed (`TypeError: m.split is not a function`) on SQL API queries that Cube turns into *member expressions*: `count(*)`, functions such as `upper(rep_id)`, subqueries, WHERE on an expression. Metabase GUI questions produce these. The query failed (no data leaked), but dashboards broke. `queryRewrite` now reads the cubes used from both member strings and member-expression objects, and over-filters rather than skips anything it does not recognise. Covered by `docker/cube_rls_unit_check.js` and `scripts/check_enterprise_stack.py`.
 - With `CUBEJS_DEV_MODE=false` every query failed: production mode needs a separate Cube Store, which the compose file lacked. Added a pinned `cubestore` service; it also stops dev mode from writing an embedded Cube Store into `docker/cube_schema/.cubestore` (inside the repo).
 - In dev mode Cube does not reject invalid or unsigned (`alg: none`) JWTs; it passes an empty security context. `cube.js` denies any query without `role: admin` or `rep_id`, which is what keeps dev mode safe. Keep that deny-by-default rule if you change `cube.js`.
+
+**Found while implementing from this spec** (Section 10 run end to end in a fresh folder, including step 7):
+
+- `query_duckdb` returned DECIMAL results (for example `SUM(amount)`) as JSON strings (`"414000.0"`) while DOUBLE columns came back as numbers. DECIMALs now become JSON numbers whenever a float holds the value exactly; values that would lose digits (for example a `DECIMAL(38,2)` total) stay exact strings. Covered by `test_decimal_results_are_json_numbers`.
+- `publish_marts_to_postgres.py` printed the full Postgres connection string, **password included**, in its traceback when Postgres was unreachable (DuckDB echoes the DSN in the error). Connection and publish errors are now reported in one line with passwords masked (`password=***`, `postgresql://user:***@host`).
 
 Additional hardening found while fixing: the dbt subprocess no longer inherits the MCP server's stdin (`stdin=DEVNULL`); DuckDB's progress bar is disabled so nothing can reach stdout; a `DATA_LAKE_DIR` equal to (or a parent of) the project directory is refused; lake file names containing `'`, `{` or `}` are rejected.
 
@@ -227,6 +232,7 @@ data_lake/
 docker/.env
 .mcp.json
 docker/cube_schema/.cubestore/
+.user.yml
 ```
 
 ---
@@ -596,6 +602,7 @@ import subprocess
 import sys
 import threading
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 
@@ -671,8 +678,25 @@ UNSAFE_LAKE_PATH_CHARS = set("'{}")
 # ------------------------------------------------------------------------------
 # Generic helpers
 # ------------------------------------------------------------------------------
+def _json_default(value: Any) -> Any:
+    """JSON fallback for values json can't encode (DECIMAL, DATE, TIMESTAMP, UUID, ...).
+
+    DuckDB returns DECIMAL (e.g. SUM of a DECIMAL column) as Decimal. It becomes a JSON number
+    when a float holds it exactly, so clients get numbers like they do for DOUBLE columns; a
+    value that would lose digits as a float (e.g. DECIMAL(38,2) totals) stays an exact string.
+    Everything else is rendered with str().
+    """
+    if isinstance(value, Decimal):
+        if value.is_finite():
+            as_float = float(value)
+            if Decimal(repr(as_float)) == value:
+                return as_float
+        return str(value)
+    return str(value)
+
+
 def _json(payload: Any) -> str:
-    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default)
 
 
 def _sql_str(value: str) -> str:
@@ -2344,6 +2368,7 @@ Close other writers of warehouse.duckdb first (it is attached read-only).
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -2385,6 +2410,14 @@ def _pg_dsn() -> str:
     return f"host={host} port={port} dbname={dbname} user={user} password={password}"
 
 
+def _redact(text: str) -> str:
+    """Hide passwords in error text (DuckDB echoes the whole connection string on failure)."""
+    text = re.sub(r"(password\s*=\s*)('[^']*'|[^\s'\"]+)", r"\1***", text, flags=re.IGNORECASE)
+    text = re.sub(r"(postgres(?:ql)?://[^:/@\s]+:)[^@\s]+@", r"\1***@", text)
+    password = os.environ.get("POSTGRES_PASSWORD")
+    return text.replace(password, "***") if password else text
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true", help="List marts tables without connecting to Postgres")
@@ -2413,13 +2446,23 @@ def main() -> None:
         _load_docker_env()
         con.execute("INSTALL postgres")
         con.execute("LOAD postgres")
-        con.execute(f"ATTACH {_sql_str(_pg_dsn())} AS pg (TYPE postgres)")
-        con.execute("CREATE SCHEMA IF NOT EXISTS pg.marts")
-        for table in tables:
-            con.execute(f"DROP TABLE IF EXISTS pg.marts.{_ident(table)}")
-            con.execute(f"CREATE TABLE pg.marts.{_ident(table)} AS SELECT * FROM wh.marts.{_ident(table)}")
-            count = con.execute(f"SELECT count(*) FROM pg.marts.{_ident(table)}").fetchone()[0]
-            print(f"  published marts.{table}: {count} rows")
+        try:
+            con.execute(f"ATTACH {_sql_str(_pg_dsn())} AS pg (TYPE postgres)")
+        except duckdb.Error as exc:
+            # `from None`: the chained traceback would print the DSN, password included
+            raise SystemExit(
+                f"Could not connect to Postgres: {_redact(str(exc))}\n"
+                "Is the stack running? docker compose -f docker/docker-compose.yml up -d"
+            ) from None
+        try:
+            con.execute("CREATE SCHEMA IF NOT EXISTS pg.marts")
+            for table in tables:
+                con.execute(f"DROP TABLE IF EXISTS pg.marts.{_ident(table)}")
+                con.execute(f"CREATE TABLE pg.marts.{_ident(table)} AS SELECT * FROM wh.marts.{_ident(table)}")
+                count = con.execute(f"SELECT count(*) FROM pg.marts.{_ident(table)}").fetchone()[0]
+                print(f"  published marts.{table}: {count} rows")
+        except duckdb.Error as exc:
+            raise SystemExit(f"Publishing failed: {_redact(str(exc))}") from None
     finally:
         con.close()
 
@@ -2869,6 +2912,20 @@ def test_fy2026_actual_vs_target(m, built):
     assert q["success"] and q["row_count"] == 4, q
 
 
+def test_decimal_results_are_json_numbers(m, built):
+    q = _j(m.query_duckdb(
+        "SELECT SUM(amount) AS total, CAST(1.10 AS DECIMAL(10, 2)) AS small, "
+        "CAST('12345678901234567890.12' AS DECIMAL(38, 2)) AS big, DATE '2026-01-31' AS day "
+        "FROM marts.fact_sales"
+    ))
+    assert q["success"], q
+    row = q["rows"][0]
+    assert isinstance(row["total"], float) and row["total"] > 0, row
+    assert row["small"] == 1.1
+    assert row["big"] == "12345678901234567890.12"  # a float would lose digits: stays exact text
+    assert row["day"] == "2026-01-31"
+
+
 def test_fiscal_year_boundaries(m, built):
     q = _j(m.query_duckdb(
         "SELECT date_day::varchar AS d, fiscal_year, fiscal_quarter, fiscal_month_number "
@@ -3110,7 +3167,7 @@ def test_stdio_protocol_from_foreign_cwd(project, built):
 Run these steps in order from the project root.
 
 1. **Scaffold files** from Sections 4–9 exactly as written. Create empty `models/staging/`, `models/marts/` and `data_tests/` directories (with `.gitkeep`).
-2. **Install** (uv picks Python 3.12 from `.python-version`):
+2. **Install** (uv picks Python 3.12 from `.python-version`; 3.11 also works):
    ```bash
    uv sync
    ```
@@ -3119,7 +3176,7 @@ Run these steps in order from the project root.
    uv run python generate_mock_lake.py
    uv run dbt debug --profiles-dir .
    ```
-4. **Run the test suite** (expect 46 passed):
+4. **Run the test suite** (expect 47 passed):
    ```bash
    uv run pytest -v
    ```
@@ -3138,7 +3195,7 @@ Run these steps in order from the project root.
 ## 11. Known limitations
 
 - **MCP SDK 2.x:** this server targets the 1.x API (`mcp.server.fastmcp`). Moving to 2.x means migrating to `mcp.server.mcpserver.MCPServer`.
-- **Python:** verified on 3.12; `requires-python` is capped at `<3.13` until the suite is run on newer versions.
+- **Python:** verified on 3.12 and 3.11; `requires-python` is capped at `<3.13` until the suite is run on newer versions.
 - **No RLS in the MCP query tool:** anyone with access to the MCP server can read all warehouse and lake data.
 - **Single writer:** DuckDB allows one writing process. Close the DuckDB CLI/DBeaver (or a second MCP server) before `run_dbt_models`; conflicts are reported as `lock_conflict`.
 - **Relative lake paths:** staging views store `read_parquet('data_lake/…')`. Tools other than this server must open `warehouse.duckdb` with the project root as working directory (or use `materialized='table'` for those models).

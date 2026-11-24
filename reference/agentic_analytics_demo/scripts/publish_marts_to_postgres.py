@@ -15,6 +15,7 @@ Close other writers of warehouse.duckdb first (it is attached read-only).
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -56,6 +57,14 @@ def _pg_dsn() -> str:
     return f"host={host} port={port} dbname={dbname} user={user} password={password}"
 
 
+def _redact(text: str) -> str:
+    """Hide passwords in error text (DuckDB echoes the whole connection string on failure)."""
+    text = re.sub(r"(password\s*=\s*)('[^']*'|[^\s'\"]+)", r"\1***", text, flags=re.IGNORECASE)
+    text = re.sub(r"(postgres(?:ql)?://[^:/@\s]+:)[^@\s]+@", r"\1***@", text)
+    password = os.environ.get("POSTGRES_PASSWORD")
+    return text.replace(password, "***") if password else text
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true", help="List marts tables without connecting to Postgres")
@@ -84,13 +93,23 @@ def main() -> None:
         _load_docker_env()
         con.execute("INSTALL postgres")
         con.execute("LOAD postgres")
-        con.execute(f"ATTACH {_sql_str(_pg_dsn())} AS pg (TYPE postgres)")
-        con.execute("CREATE SCHEMA IF NOT EXISTS pg.marts")
-        for table in tables:
-            con.execute(f"DROP TABLE IF EXISTS pg.marts.{_ident(table)}")
-            con.execute(f"CREATE TABLE pg.marts.{_ident(table)} AS SELECT * FROM wh.marts.{_ident(table)}")
-            count = con.execute(f"SELECT count(*) FROM pg.marts.{_ident(table)}").fetchone()[0]
-            print(f"  published marts.{table}: {count} rows")
+        try:
+            con.execute(f"ATTACH {_sql_str(_pg_dsn())} AS pg (TYPE postgres)")
+        except duckdb.Error as exc:
+            # `from None`: the chained traceback would print the DSN, password included
+            raise SystemExit(
+                f"Could not connect to Postgres: {_redact(str(exc))}\n"
+                "Is the stack running? docker compose -f docker/docker-compose.yml up -d"
+            ) from None
+        try:
+            con.execute("CREATE SCHEMA IF NOT EXISTS pg.marts")
+            for table in tables:
+                con.execute(f"DROP TABLE IF EXISTS pg.marts.{_ident(table)}")
+                con.execute(f"CREATE TABLE pg.marts.{_ident(table)} AS SELECT * FROM wh.marts.{_ident(table)}")
+                count = con.execute(f"SELECT count(*) FROM pg.marts.{_ident(table)}").fetchone()[0]
+                print(f"  published marts.{table}: {count} rows")
+        except duckdb.Error as exc:
+            raise SystemExit(f"Publishing failed: {_redact(str(exc))}") from None
     finally:
         con.close()
 

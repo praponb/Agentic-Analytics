@@ -16,7 +16,7 @@ An open-source blueprint for "chat with your data" and AI-assisted data modellin
 
 | Part | Status |
 |---|---|
-| Local core: dbt + DuckDB + MCP server | Tested. `pytest` 46/46 on DuckDB 2.0.1, 1.4.4 and 1.3.2 with Python 3.12, and on Python 3.11; `dbt build` 66/66; MCP protocol tested over STDIO. GitHub Actions re-runs this on every push (see below). |
+| Local core: dbt + DuckDB + MCP server | Tested. `pytest` 47/47 on DuckDB 2.0.1, 1.4.4 and 1.3.2 with Python 3.12, and on Python 3.11; `dbt build` 66/66; MCP protocol tested over STDIO. GitHub Actions re-runs this on every push (see below). |
 | Enterprise stack: Postgres + Cube + Metabase | Tested live on Docker (macOS, arm64) in both dev and production mode. Row-level security checked through the Cube REST API, the Cube SQL API and Metabase. |
 
 ## Quick start (local core)
@@ -28,7 +28,7 @@ cd reference/agentic_analytics_demo
 uv sync                                    # install dependencies from uv.lock
 uv run python generate_mock_lake.py        # create sample data in data_lake/
 uv run dbt debug --profiles-dir .          # check the dbt setup
-uv run pytest -v                           # expect 46 passed
+uv run pytest -v                           # expect 47 passed
 uv run python scripts/write_mcp_config.py  # register the MCP server, then restart Claude Code
 ```
 
