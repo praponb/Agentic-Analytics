@@ -11,3 +11,4 @@ data_lake/
 docker/.env
 .mcp.json
 docker/cube_schema/.cubestore/
+.user.yml
