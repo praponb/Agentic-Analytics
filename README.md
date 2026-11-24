@@ -50,7 +50,7 @@ Services listen on `127.0.0.1` only: Metabase on port 3000, Cube on 4000 (REST a
 
 ## Continuous integration
 
-[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs on every push to `main`, on pull requests and on demand:
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs on every push to `main` or `b_pbv_main`, on pull requests and on demand:
 - **pytest:** the full suite on Ubuntu with Python 3.12 + DuckDB 2.0.1, 1.4.4 and 1.3.2, and Python 3.11 + DuckDB 2.0.1.
 - **Docker stack (static):** `docker compose config` and the `cube.js` row-level security unit checks. CI does not start the containers; run `scripts/check_enterprise_stack.py` locally for the live check.
 
