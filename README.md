@@ -10,7 +10,7 @@ An open-source blueprint for "chat with your data" and AI-assisted data modellin
 |---|---|
 | [`Agentic Analytics Spec v1.1.md`](Agentic%20Analytics%20Spec%20v1.1.md) | **The spec to use.** Corrected and tested implementation spec. Hand this file to Claude Code. Section 0 lists every fix made to v1.0. |
 | [`reference/agentic_analytics_demo/`](reference/agentic_analytics_demo/) | A working copy of every file in the spec. The spec's code blocks are generated from these files, so the two always match. |
-| [`agentic_analytics_demo/`](agentic_analytics_demo/) | The project implemented from the spec (Section 10 checklist), including the dbt models the MCP tools generated, plus a local sales dashboard (see below). |
+| [`agentic_analytics_demo/`](agentic_analytics_demo/) | The project implemented from the spec (Section 10 checklist), including the dbt models the MCP tools generated, plus the sales dashboard and its hosting (see below; spec Section 11). |
 | `Agentic Analytics (dbt + DuckDB + FastMCP) Spec.docx` | The original v1.0 spec, kept for reference only. It has known blocking problems (see Section 0 of v1.1); do not implement from it. |
 
 ## Verification status
@@ -116,7 +116,7 @@ Fiscal years start on 1 October and are named by the year they end in (October 2
 
 ## Known limitations
 
-See Section 11 of the spec. The main ones:
+See Section 12 of the spec. The main ones:
 - The MCP server targets MCP Python SDK 1.x.
 - DuckDB allows only one writing process at a time.
 - Lake CSV files must be UTF-8.

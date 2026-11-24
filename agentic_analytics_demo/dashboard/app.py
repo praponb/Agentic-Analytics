@@ -43,7 +43,7 @@ def fmt_thb(value: float) -> str:
 
 
 st.title("Agentic Analytics Dashboard")
-st.caption("agentic-dashboard.praponb.com · local preview · sales from the dbt marts in warehouse.duckdb")
+st.caption("agentic-dashboard.praponb.com · sales from the dbt marts in warehouse.duckdb")
 
 path = data.warehouse_path()
 try:

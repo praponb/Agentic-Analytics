@@ -14,6 +14,7 @@
 > | Local core (dbt + DuckDB + MCP server, Sections 4–6) | **Tested.** `pytest` 47/47 on DuckDB 2.0.1, 1.4.4 and 1.3.2 with Python 3.12.13, and on Python 3.11.15 (dbt-core 1.12.7, dbt-duckdb 1.11.1, mcp 1.30.0), locally and in GitHub Actions; `dbt build` 66/66; MCP protocol tested over STDIO with a real client. |
 > | Execution checklist (Section 10) | **Tested** end to end in a fresh copy. |
 > | Enterprise Docker stack (Section 7) | **Tested live** on Docker 29.9.3 (Postgres 16.16, Cube v1.8.32 + Cube Store, Metabase v0.65.6.3), from empty volumes, with `CUBEJS_DEV_MODE` both `true` and `false`: marts published to Postgres; RLS checked over Cube REST (JWT) and the SQL API; Metabase connected to the SQL API with native SQL and GUI questions filtered per user. `scripts/check_enterprise_stack.py` reproduces these checks. |
+> | Sales dashboard + hosting (Section 11, optional add-on) | **Tested.** 8 `pytest` tests (Streamlit 1.67, AppTest); checked in Chrome in light and dark mode; image built with `dbt build` 66/66 and run on Ubuntu 26.04 (Docker 29) behind a Cloudflare Tunnel and Cloudflare Access; container image build and health check run in GitHub Actions. |
 
 ---
 
@@ -47,6 +48,11 @@
 - `query_duckdb` returned DECIMAL results (for example `SUM(amount)`) as JSON strings (`"414000.0"`) while DOUBLE columns came back as numbers. DECIMALs now become JSON numbers whenever a float holds the value exactly; values that would lose digits (for example a `DECIMAL(38,2)` total) stay exact strings. Covered by `test_decimal_results_are_json_numbers`.
 - `publish_marts_to_postgres.py` printed the full Postgres connection string, **password included**, in its traceback when Postgres was unreachable (DuckDB echoes the DSN in the error). Connection and publish errors are now reported in one line with passwords masked (`password=***`, `postgresql://user:***@host`).
 
+**Added after implementation** (optional, Section 11):
+
+- A small Streamlit **sales dashboard** (`dashboard/`) that reads the dbt marts read-only: KPIs, actual vs. target by rep, revenue by fiscal month, breakdowns by course, region and channel, and the order lines. It has no row-level security, so it listens on `127.0.0.1` locally.
+- **Hosting** for it: a Docker image whose build runs `dbt build` (a failing dbt test fails the deploy), a Compose project with a dedicated Cloudflare Tunnel (no inbound ports), and a Cloudflare Access login in front of the hostname.
+
 Additional hardening found while fixing: the dbt subprocess no longer inherits the MCP server's stdin (`stdin=DEVNULL`); DuckDB's progress bar is disabled so nothing can reach stdout; a `DATA_LAKE_DIR` equal to (or a parent of) the project directory is refused; lake file names containing `'`, `{` or `}` are rejected.
 
 ---
@@ -79,6 +85,7 @@ This specification consolidates an Agentic Analytics architecture inspired by th
 | Data agent & modelling MCP | Fabric IQ MCP + Power BI modelling MCP | Python FastMCP server `mcp_server/dbt_mcp_server.py` | Discovery, scaffolding, dim_date, test inference, dbt run/test/compile, read-only SQL |
 | AI client | M365 Copilot / Teams | Claude Code, Claude Desktop, VS Code (Cline/Continue) | Natural-language orchestration |
 | BI & access control | Power BI Service | Metabase OSS (via Cube SQL API) | Dashboards |
+| Quick report (optional) | Power BI report | Streamlit app `dashboard/` (Section 11) | One trusted viewer; no RLS, so local or behind a login |
 
 ```text
 [data_lake/*.parquet, *.csv]
@@ -3189,10 +3196,822 @@ Run these steps in order from the project root.
 
    Expected: 4 reps for FY2026; `run_dbt_tests` succeeds with 0 failures.
 7. *(Optional)* **Enterprise stack:** follow Section 7 (needs Docker). Expected: `publish_marts_to_postgres.py` lists 5 tables and `check_enterprise_stack.py` prints `ALL CHECKS PASSED`.
+8. *(Optional)* **Sales dashboard:** after step 6, add the Section 11 files and the `dashboard` dependency group, then:
+   ```bash
+   uv run --group dashboard pytest tests/test_dashboard.py -v      # expect 8 passed
+   uv run --group dashboard streamlit run dashboard/app.py          # http://localhost:8501
+   ```
+   Expected for FY2026: revenue ฿768,400, 15 orders, 57 seats, target ฿820,000, 93.7% of target. To host it, follow Section 11.3.
 
 ---
 
-## 11. Known limitations
+## 11. Sales dashboard & hosting (optional add-on)
+
+A small web page for one trusted viewer, built on the marts from step 6 of Section 10. Unlike Sections 4–9, these files are not part of `reference/agentic_analytics_demo/`; they are copied from the implemented project `agentic_analytics_demo/`, which has the same layout.
+
+### 11.1 Rules (keep these if you change the dashboard)
+
+| Rule | Why |
+|---|---|
+| Open `warehouse.duckdb` with `read_only=True` and `enable_external_access=false`, in a short-lived connection per refresh (`dashboard/data.py`, `_query`). | DuckDB allows one writer *or* many readers. A long-lived connection would block `run_dbt_models`; a busy file is reported on the page instead of crashing it. |
+| No row-level security: everyone who can open the page sees every row. Locally bind to `127.0.0.1` (`.streamlit/config.toml`); hosted, put a login in front (Cloudflare Access). | Per-user dashboards belong in Metabase via Cube (Section 7). |
+| Targets exist per rep and fiscal year, so target figures ignore the region, channel and course filters, and the page says so. | Otherwise % of target would compare filtered actuals with an unfiltered target. |
+| Fiscal year runs October–September, named by its end year (`dim_date`); the month chart always shows all 12 fiscal months, zero-filled. | Matches the `fiscal_year_naming = end` setting. |
+| Charts use one colour pair that passes contrast and colour-blind checks in both light and dark themes (`#3987e5` actual, `#d95926` target), with a legend, tooltips and a table view. | Streamlit's theme detection lags, so per-theme colours flicker. |
+
+### 11.2 Files
+
+Add the optional dependency group to `pyproject.toml` and refresh the lock file (`uv lock`):
+
+```toml
+[dependency-groups]
+dashboard = [
+    "streamlit>=1.66,<2",
+]
+```
+
+**`.streamlit/config.toml`**
+
+```toml
+# Streamlit settings for dashboard/app.py (read when you run streamlit from the project root).
+[server]
+address = "127.0.0.1"   # local only: the dashboard has no row-level security
+port = 8501
+headless = true
+
+[browser]
+gatherUsageStats = false
+serverAddress = "localhost"
+
+[client]
+toolbarMode = "viewer"   # hide Streamlit's Deploy button and developer menu items
+```
+
+**`dashboard/data.py`**
+
+```python
+"""Read-only data access and aggregations for the local sales dashboard.
+
+Reads the dbt `marts` schema of warehouse.duckdb. Every query opens its own read-only
+connection and closes it straight away, so the dashboard never holds DuckDB's file lock
+while dbt (or the MCP server) needs to write. No row-level security: every row in the
+warehouse is visible, which is why the app only listens on 127.0.0.1.
+"""
+
+from __future__ import annotations
+
+import os
+from contextlib import closing
+from datetime import date
+from pathlib import Path
+
+import duckdb
+import pandas as pd
+
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+
+
+class WarehouseUnavailable(RuntimeError):
+    """The warehouse file is missing, locked by a writer, or has no marts yet."""
+
+
+def warehouse_path() -> Path:
+    raw = os.environ.get("DASHBOARD_DUCKDB_PATH") or os.environ.get("DUCKDB_PATH") or PROJECT_DIR / "warehouse.duckdb"
+    return Path(raw).resolve()
+
+
+def _query(sql: str, params: list | None = None) -> pd.DataFrame:
+    path = warehouse_path()
+    if not path.exists():
+        raise WarehouseUnavailable(f"{path} not found. Build the marts first (run_dbt_models or `dbt build`).")
+    try:
+        # read_only + closed after each query; external access off: the app reads only this file
+        with closing(duckdb.connect(str(path), read_only=True, config={"enable_external_access": False})) as con:
+            return con.execute(sql, params or []).df()
+    except duckdb.IOException as exc:
+        if "lock" in str(exc).lower():
+            raise WarehouseUnavailable(
+                "warehouse.duckdb is locked by a writer (a dbt run, the DuckDB CLI or DBeaver). "
+                "Refresh when it has finished."
+            ) from exc
+        raise
+    except duckdb.CatalogException as exc:
+        raise WarehouseUnavailable(f"The marts are missing or incomplete: {exc}") from exc
+
+
+def load_sales_lines() -> pd.DataFrame:
+    """One row per order line, with fiscal calendar, rep and course names."""
+    df = _query(
+        """
+        SELECT
+            f.order_id,
+            f.sale_date,
+            CAST(date_trunc('month', f.sale_date) AS DATE) AS month_start,
+            d.fiscal_year,
+            d.fiscal_year_label,
+            d.fiscal_month_number,
+            f.rep_id,
+            r.rep_name,
+            c.course_name,
+            f.region,
+            f.channel_type,
+            f.quantity,
+            CAST(f.unit_price AS DOUBLE) AS unit_price,
+            CAST(f.amount AS DOUBLE) AS amount
+        FROM marts.fact_sales f
+        JOIN marts.dim_date d ON f.date_key = d.date_key
+        JOIN marts.dim_sales_rep r ON f.rep_id = r.rep_id
+        JOIN marts.dim_course c ON f.course_id = c.course_id
+        ORDER BY f.sale_date, f.order_id
+        """
+    )
+    df["sale_date"] = pd.to_datetime(df["sale_date"])
+    df["month_start"] = pd.to_datetime(df["month_start"])
+    return df
+
+
+def load_targets() -> pd.DataFrame:
+    return _query(
+        """
+        SELECT t.fiscal_year, t.rep_id, r.rep_name, CAST(t.annual_target AS DOUBLE) AS annual_target
+        FROM marts.fact_sales_target t
+        JOIN marts.dim_sales_rep r ON t.rep_id = r.rep_id
+        ORDER BY t.fiscal_year, t.rep_id
+        """
+    )
+
+
+def load_fiscal_years() -> pd.DataFrame:
+    """Fiscal years in dim_date with their first/last day and month starts (Oct..Sep)."""
+    df = _query(
+        """
+        SELECT fiscal_year, any_value(fiscal_year_label) AS fiscal_year_label,
+               min(date_day) AS first_day, max(date_day) AS last_day
+        FROM marts.dim_date GROUP BY fiscal_year ORDER BY fiscal_year
+        """
+    )
+    df["first_day"] = pd.to_datetime(df["first_day"])
+    df["last_day"] = pd.to_datetime(df["last_day"])
+    return df
+
+
+def default_fiscal_year(fiscal_years: pd.DataFrame, lines: pd.DataFrame, today: date) -> int:
+    """The latest fiscal year that has ended and has sales; else the latest year with sales."""
+    with_sales = set(lines["fiscal_year"].unique())
+    candidates = fiscal_years[fiscal_years["fiscal_year"].isin(with_sales)]
+    if candidates.empty:
+        return int(fiscal_years["fiscal_year"].max())
+    finished = candidates[candidates["last_day"].dt.date < today]
+    pool = finished if not finished.empty else candidates
+    return int(pool["fiscal_year"].max())
+
+
+def filter_lines(lines: pd.DataFrame, fiscal_year: int, reps=None, regions=None, channels=None, courses=None) -> pd.DataFrame:
+    out = lines[lines["fiscal_year"] == fiscal_year]
+    for column, chosen in (("rep_name", reps), ("region", regions), ("channel_type", channels), ("course_name", courses)):
+        if chosen:
+            out = out[out[column].isin(chosen)]
+    return out
+
+
+def rep_vs_target(lines: pd.DataFrame, targets: pd.DataFrame, fiscal_year: int, reps=None) -> pd.DataFrame:
+    """Actual vs. target per rep for one fiscal year. Targets exist per rep and year only,
+    so this ignores the region/channel/course filters on purpose."""
+    year_targets = targets[targets["fiscal_year"] == fiscal_year][["rep_id", "rep_name", "annual_target"]]
+    actual = (
+        lines[lines["fiscal_year"] == fiscal_year]
+        .groupby(["rep_id", "rep_name"], as_index=False)["amount"].sum()
+        .rename(columns={"amount": "actual"})
+    )
+    out = year_targets.merge(actual, on=["rep_id", "rep_name"], how="outer")
+    out["actual"] = out["actual"].fillna(0.0)
+    out = out.rename(columns={"annual_target": "target"})
+    out["pct_of_target"] = (out["actual"] / out["target"] * 100).where(out["target"] > 0).round(1)
+    if reps:
+        out = out[out["rep_name"].isin(reps)]
+    return out.sort_values("rep_id").reset_index(drop=True)
+
+
+def monthly_revenue(lines: pd.DataFrame, fiscal_years: pd.DataFrame, fiscal_year: int) -> pd.DataFrame:
+    """Revenue per month of the fiscal year, with empty months shown as 0."""
+    fy = fiscal_years[fiscal_years["fiscal_year"] == fiscal_year].iloc[0]
+    months = pd.date_range(fy["first_day"], fy["last_day"], freq="MS")
+    by_month = lines.groupby("month_start")["amount"].sum()
+    out = pd.DataFrame({"month_start": months})
+    out["revenue"] = out["month_start"].map(by_month).fillna(0.0)
+    out["orders"] = out["month_start"].map(lines.groupby("month_start")["order_id"].nunique()).fillna(0).astype(int)
+    return out
+
+
+def revenue_by(lines: pd.DataFrame, column: str) -> pd.DataFrame:
+    return (
+        lines.groupby(column, as_index=False)
+        .agg(revenue=("amount", "sum"), orders=("order_id", "nunique"), seats=("quantity", "sum"))
+        .sort_values("revenue", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def kpis(lines: pd.DataFrame, rep_targets: pd.DataFrame) -> dict:
+    target = float(rep_targets["target"].fillna(0).sum())
+    actual_for_target = float(rep_targets["actual"].sum())
+    return {
+        "revenue": float(lines["amount"].sum()),
+        "orders": int(lines["order_id"].nunique()),
+        "seats": int(lines["quantity"].sum()),
+        "target": target,
+        "pct_of_target": round(actual_for_target / target * 100, 1) if target else None,
+    }
+```
+
+**`dashboard/app.py`**
+
+```python
+"""Sales dashboard (hosted at https://agentic-dashboard.praponb.com behind Cloudflare Access).
+
+Run locally from the project root:
+    uv sync --group dashboard
+    uv run --group dashboard streamlit run dashboard/app.py
+
+Locally it listens on http://127.0.0.1:8501 only (see .streamlit/config.toml); the hosted copy
+(Dockerfile.dashboard, deploy/) is reachable only through a Cloudflare Access login. It shows
+every row in the warehouse, with no row-level security. For per-user dashboards use Metabase
+via Cube.
+"""
+
+from __future__ import annotations
+
+import sys
+from datetime import date, datetime
+from pathlib import Path
+
+import altair as alt
+import pandas as pd
+import streamlit as st
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import data  # noqa: E402  (local module next to this file)
+
+st.set_page_config(page_title="Agentic Analytics Dashboard", page_icon="📊", layout="wide")
+
+# Categorical slots 1-2 (blue, orange), dark-surface steps. This pair passes the palette
+# checks (lightness, chroma, colour-blind separation, 3:1 contrast) on BOTH the light and the
+# dark theme, so it needs no theme detection. Single-series charts use blue alone.
+BLUE, ORANGE = "#3987e5", "#d95926"
+THB = ",.0f"
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load(mtime: float):
+    """Cached for 60 s and per file version (mtime), so a new dbt build shows up on refresh."""
+    return data.load_sales_lines(), data.load_targets(), data.load_fiscal_years()
+
+
+def fmt_thb(value: float) -> str:
+    return f"฿{value:,.0f}"
+
+
+st.title("Agentic Analytics Dashboard")
+st.caption("agentic-dashboard.praponb.com · sales from the dbt marts in warehouse.duckdb")
+
+path = data.warehouse_path()
+try:
+    lines, targets, fiscal_years = load(path.stat().st_mtime if path.exists() else 0.0)
+except data.WarehouseUnavailable as exc:
+    st.error(str(exc))
+    st.stop()
+
+if lines.empty:
+    st.warning("marts.fact_sales has no rows yet.")
+    st.stop()
+
+# ---- Filters: one row above the charts -------------------------------------------------
+years = sorted(lines["fiscal_year"].unique().tolist())
+labels = dict(zip(fiscal_years["fiscal_year"], fiscal_years["fiscal_year_label"]))
+today = date.today()
+default_year = data.default_fiscal_year(fiscal_years, lines, today)
+
+
+def year_label(fy: int) -> str:
+    row = fiscal_years[fiscal_years["fiscal_year"] == fy]
+    in_progress = not row.empty and row.iloc[0]["first_day"].date() <= today <= row.iloc[0]["last_day"].date()
+    return labels.get(fy, f"FY{fy}") + (" (in progress)" if in_progress else "")
+
+
+f1, f2, f3, f4, f5 = st.columns([1.1, 1.6, 1.6, 1.3, 1.8])
+fiscal_year = f1.selectbox("Fiscal year", years, index=years.index(default_year), format_func=year_label, key="fy")
+reps = f2.multiselect("Sales rep", sorted(lines["rep_name"].unique()), placeholder="All reps", key="reps")
+regions = f3.multiselect("Region", sorted(lines["region"].unique()), placeholder="All regions", key="regions")
+channels = f4.multiselect("Channel", sorted(lines["channel_type"].unique()), placeholder="All channels", key="channels")
+courses = f5.multiselect("Course", sorted(lines["course_name"].unique()), placeholder="All courses", key="courses")
+
+selected = data.filter_lines(lines, fiscal_year, reps, regions, channels, courses)
+rep_targets = data.rep_vs_target(lines, targets, fiscal_year, reps)
+k = data.kpis(selected, rep_targets)
+
+# ---- KPI tiles -------------------------------------------------------------------------
+m1, m2, m3, m4, m5 = st.columns(5)
+m1.metric("Revenue", fmt_thb(k["revenue"]))
+m2.metric("Orders", f"{k['orders']:,}")
+m3.metric("Seats sold", f"{k['seats']:,}")
+m4.metric("Target", fmt_thb(k["target"]) if k["target"] else "No target")
+m5.metric("% of target", f"{k['pct_of_target']:.1f}%" if k["pct_of_target"] is not None else "–")
+if regions or channels or courses:
+    st.caption("Target and % of target are set per rep and fiscal year, so they ignore the region, channel and course filters.")
+
+# ---- Actual vs target | monthly trend -----------------------------------------------------
+left, right = st.columns(2)
+
+with left:
+    st.subheader("Actual vs. target by rep")
+    if rep_targets.empty:
+        st.info("No reps or targets for this selection.")
+    else:
+        long = rep_targets.melt(
+            id_vars=["rep_name", "pct_of_target"], value_vars=["actual", "target"], var_name="measure", value_name="thb"
+        )
+        long["measure"] = long["measure"].map({"actual": "Actual", "target": "Target"})
+        bars = (
+            alt.Chart(long)
+            .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+            .encode(
+                x=alt.X("rep_name:N", title=None, axis=alt.Axis(labelAngle=0)),
+                xOffset=alt.XOffset("measure:N", scale=alt.Scale(paddingInner=0.08)),
+                y=alt.Y("thb:Q", title="THB", axis=alt.Axis(format="~s")),
+                color=alt.Color(
+                    "measure:N",
+                    scale=alt.Scale(domain=["Actual", "Target"], range=[BLUE, ORANGE]),
+                    legend=alt.Legend(title=None, orient="top"),
+                ),
+                tooltip=[
+                    alt.Tooltip("thb:Q", title="THB", format=THB),
+                    alt.Tooltip("measure:N", title="Measure"),
+                    alt.Tooltip("rep_name:N", title="Rep"),
+                    alt.Tooltip("pct_of_target:Q", title="% of target", format=".1f"),
+                ],
+            )
+            .properties(height=320)
+        )
+        st.altair_chart(bars, width="stretch")
+
+with right:
+    st.subheader("Revenue by month")
+    monthly = data.monthly_revenue(selected, fiscal_years, fiscal_year)
+    hover = alt.selection_point(fields=["month_start"], nearest=True, on="pointerover", empty=False, clear="pointerout")
+    base = alt.Chart(monthly).encode(x=alt.X("month_start:T", title=None, axis=alt.Axis(format="%b %Y", labelAngle=0, tickCount="month")))
+    line = base.mark_line(strokeWidth=2, color=BLUE).encode(y=alt.Y("revenue:Q", title="THB", axis=alt.Axis(format="~s")))
+    points = base.mark_point(filled=True, size=70, color=BLUE).encode(
+        y="revenue:Q", opacity=alt.condition(hover, alt.value(1), alt.value(0))
+    )
+    rule = (
+        base.mark_rule(strokeWidth=1, color="gray")
+        .encode(
+            opacity=alt.condition(hover, alt.value(0.6), alt.value(0)),
+            tooltip=[
+                alt.Tooltip("revenue:Q", title="Revenue (THB)", format=THB),
+                alt.Tooltip("orders:Q", title="Orders"),
+                alt.Tooltip("month_start:T", title="Month", format="%B %Y"),
+            ],
+        )
+        .add_params(hover)
+    )
+    st.altair_chart((line + points + rule).properties(height=320), width="stretch")
+
+
+# ---- Breakdowns --------------------------------------------------------------------------
+def breakdown(df: pd.DataFrame, column: str, title: str) -> alt.Chart:
+    return (
+        alt.Chart(df)
+        .mark_bar(cornerRadiusTopRight=4, cornerRadiusBottomRight=4, color=BLUE)
+        .encode(
+            y=alt.Y(f"{column}:N", sort="-x", title=None),
+            x=alt.X("revenue:Q", title="THB", axis=alt.Axis(format="~s")),
+            tooltip=[
+                alt.Tooltip("revenue:Q", title="Revenue (THB)", format=THB),
+                alt.Tooltip(f"{column}:N", title=title),
+                alt.Tooltip("orders:Q", title="Orders"),
+                alt.Tooltip("seats:Q", title="Seats"),
+            ],
+        )
+        .properties(height=alt.Step(28))  # fixed px per bar: every label fits, however few bars
+    )
+
+
+c1, c2, c3 = st.columns([1.4, 1, 1])
+for col, column, title in ((c1, "course_name", "Course"), (c2, "region", "Region"), (c3, "channel_type", "Channel")):
+    with col:
+        st.subheader(f"Revenue by {title.lower()}")
+        table = data.revenue_by(selected, column)
+        if table.empty:
+            st.info("No sales for this selection.")
+        else:
+            st.altair_chart(breakdown(table, column, title), width="stretch")
+
+# ---- Table view ------------------------------------------------------------------------------
+st.subheader(f"Order lines ({len(selected):,})")
+detail = selected[["sale_date", "order_id", "rep_name", "course_name", "region", "channel_type", "quantity", "unit_price", "amount"]]
+st.dataframe(
+    detail,
+    hide_index=True,
+    width="stretch",
+    column_config={
+        "sale_date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
+        "order_id": "Order",
+        "rep_name": "Rep",
+        "course_name": "Course",
+        "region": "Region",
+        "channel_type": "Channel",
+        "quantity": st.column_config.NumberColumn("Seats"),
+        "unit_price": st.column_config.NumberColumn("Unit price (THB)", format="%,.0f"),
+        "amount": st.column_config.NumberColumn("Amount (THB)", format="%,.0f"),
+    },
+)
+st.download_button(
+    "Download CSV",
+    detail.to_csv(index=False).encode("utf-8"),
+    file_name=f"sales_{labels.get(fiscal_year, fiscal_year)}.csv",
+    mime="text/csv",
+)
+
+updated = datetime.fromtimestamp(path.stat().st_mtime).astimezone()
+st.caption(
+    f"Data: {path.name}, last built {updated:%Y-%m-%d %H:%M %Z}. "
+    "No row-level security: this page shows every row, so keep it on 127.0.0.1 or behind a login."
+)
+```
+
+**`tests/test_dashboard.py`**
+
+```python
+"""Tests for the local Streamlit dashboard (dashboard/). Skipped unless the dashboard
+dependency group is installed:  uv sync --group dashboard && uv run pytest tests/test_dashboard.py
+
+Uses a small synthetic warehouse (same marts columns as the dbt project), so it does not
+need a dbt build.
+"""
+
+import subprocess
+import sys
+from datetime import date
+from pathlib import Path
+
+import duckdb
+import pytest
+
+pytest.importorskip("pandas")
+pytest.importorskip("streamlit")
+from streamlit.testing.v1 import AppTest  # noqa: E402
+
+PROJECT = Path(__file__).resolve().parent.parent
+APP = PROJECT / "dashboard" / "app.py"
+sys.path.insert(0, str(PROJECT / "dashboard"))
+import data  # noqa: E402
+
+# FY2026 = Oct 2025 - Sep 2026 (fiscal year named by the year it ends in)
+SALES = [
+    # order_id, sale_date, rep_id, course, region, channel, qty, unit_price
+    ("O1", "2025-10-05", "R1", "Course A", "Bangkok", "Public", 2, 1000.0),
+    ("O2", "2025-12-10", "R1", "Course B", "North", "In-house", 1, 5000.0),
+    ("O3", "2026-03-15", "R2", "Course A", "Bangkok", "Hybrid", 3, 1000.0),
+    ("O4", "2026-10-01", "R2", "Course B", "North", "Public", 1, 7000.0),  # FY2027
+    ("O5", "2025-09-30", "R1", "Course A", "Bangkok", "Public", 1, 900.0),  # FY2025
+]
+TARGETS = [("R1", 2026, 10000.0), ("R2", 2026, 6000.0), ("R1", 2027, 12000.0), ("R2", 2027, 8000.0)]
+
+
+@pytest.fixture()
+def warehouse(tmp_path, monkeypatch):
+    path = tmp_path / "warehouse.duckdb"
+    con = duckdb.connect(str(path))
+    con.execute("CREATE SCHEMA marts")
+    con.execute(
+        """
+        CREATE TABLE marts.dim_date AS
+        SELECT CAST(strftime(d, '%Y%m%d') AS INTEGER) AS date_key, CAST(d AS DATE) AS date_day,
+               year(d) + CASE WHEN month(d) >= 10 THEN 1 ELSE 0 END AS fiscal_year,
+               'FY' || (year(d) + CASE WHEN month(d) >= 10 THEN 1 ELSE 0 END) AS fiscal_year_label,
+               ((month(d) + 2) % 12) + 1 AS fiscal_month_number
+        FROM range(DATE '2024-10-01', DATE '2027-10-01', INTERVAL 1 DAY) t(d)
+        """
+    )
+    con.execute("CREATE TABLE marts.dim_sales_rep (rep_id VARCHAR, rep_name VARCHAR)")
+    con.execute("INSERT INTO marts.dim_sales_rep VALUES ('R1', 'Alice'), ('R2', 'Bob')")
+    con.execute("CREATE TABLE marts.dim_course AS SELECT md5(n) AS course_id, n AS course_name FROM (VALUES ('Course A'), ('Course B')) v(n)")
+    con.execute(
+        """CREATE TABLE marts.fact_sales (order_id VARCHAR, sale_date DATE, date_key INTEGER, rep_id VARCHAR,
+           course_id VARCHAR, region VARCHAR, channel_type VARCHAR, quantity INTEGER,
+           unit_price DECIMAL(6,1), amount DECIMAL(6,1))"""
+    )
+    for order_id, day, rep, course, region, channel, qty, price in SALES:
+        con.execute(
+            "INSERT INTO marts.fact_sales VALUES (?, CAST(? AS DATE), CAST(strftime(CAST(? AS DATE), '%Y%m%d') AS INTEGER), ?, md5(?), ?, ?, ?, ?, ?)",
+            [order_id, day, day, rep, course, region, channel, qty, price, qty * price],
+        )
+    con.execute("CREATE TABLE marts.fact_sales_target (target_id VARCHAR, rep_id VARCHAR, fiscal_year INTEGER, annual_target DOUBLE)")
+    for rep, fy, target in TARGETS:
+        con.execute("INSERT INTO marts.fact_sales_target VALUES (?, ?, ?, ?)", [f"{rep}-{fy}", rep, fy, target])
+    con.close()
+    monkeypatch.setenv("DASHBOARD_DUCKDB_PATH", str(path))
+    return path
+
+
+def test_rep_vs_target_and_kpis(warehouse):
+    lines, targets = data.load_sales_lines(), data.load_targets()
+    reps = data.rep_vs_target(lines, targets, 2026)
+    assert reps[["rep_name", "actual", "target", "pct_of_target"]].values.tolist() == [
+        ["Alice", 7000.0, 10000.0, 70.0],
+        ["Bob", 3000.0, 6000.0, 50.0],
+    ]
+    k = data.kpis(data.filter_lines(lines, 2026), reps)
+    assert k == {"revenue": 10000.0, "orders": 3, "seats": 6, "target": 16000.0, "pct_of_target": 62.5}
+
+
+def test_filters_and_breakdowns(warehouse):
+    lines = data.load_sales_lines()
+    bangkok = data.filter_lines(lines, 2026, regions=["Bangkok"])
+    assert sorted(bangkok["order_id"]) == ["O1", "O3"]
+    by_course = data.revenue_by(data.filter_lines(lines, 2026), "course_name")
+    assert sorted(by_course[["course_name", "revenue"]].values.tolist()) == [["Course A", 5000.0], ["Course B", 5000.0]]
+
+
+def test_monthly_revenue_has_all_twelve_fiscal_months(warehouse):
+    lines, years = data.load_sales_lines(), data.load_fiscal_years()
+    monthly = data.monthly_revenue(data.filter_lines(lines, 2026), years, 2026)
+    assert len(monthly) == 12
+    assert monthly["month_start"].iloc[0].strftime("%Y-%m") == "2025-10"  # fiscal year starts in October
+    assert monthly["month_start"].iloc[-1].strftime("%Y-%m") == "2026-09"
+    assert monthly["revenue"].sum() == 10000.0 and (monthly["revenue"] == 0).sum() == 9
+
+
+def test_default_fiscal_year_is_latest_finished_year(warehouse):
+    lines, years = data.load_sales_lines(), data.load_fiscal_years()
+    assert data.default_fiscal_year(years, lines, date(2026, 11, 24)) == 2026  # FY2027 still running
+    assert data.default_fiscal_year(years, lines, date(2027, 12, 1)) == 2027
+
+
+def test_connection_is_released_after_each_query(warehouse):
+    data.load_sales_lines()
+    con = duckdb.connect(str(warehouse))  # a writer (like dbt) can open the file right away
+    con.close()
+
+
+def test_app_renders_and_filters(warehouse):
+    at = AppTest.from_file(str(APP), default_timeout=60).run()
+    assert not at.exception and not at.error
+    assert at.selectbox(key="fy").value in (2026, 2027)
+    at.selectbox(key="fy").set_value(2026).run()
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Revenue"] == "฿10,000" and metrics["Target"] == "฿16,000" and metrics["% of target"] == "62.5%"
+    at.multiselect(key="regions").set_value(["North"]).run()
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Revenue"] == "฿5,000" and metrics["Target"] == "฿16,000"  # target ignores region
+    assert not at.exception
+
+
+def test_app_reports_missing_warehouse(tmp_path, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_DUCKDB_PATH", str(tmp_path / "missing.duckdb"))
+    at = AppTest.from_file(str(APP), default_timeout=60).run()
+    assert not at.exception
+    assert at.error and "not found" in at.error[0].value
+
+
+def test_app_reports_locked_warehouse(warehouse):
+    # Another process holds a read-write connection, like a running dbt build or DBeaver.
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         "import duckdb, sys, time; c = duckdb.connect(sys.argv[1]); print('ready', flush=True); time.sleep(60)",
+         str(warehouse)],
+        stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "ready"
+        at = AppTest.from_file(str(APP), default_timeout=60).run()
+        assert not at.exception
+        assert at.error and "locked" in at.error[0].value
+    finally:
+        holder.kill()
+        holder.wait()
+```
+
+The tests build their own small warehouse, so they need no dbt run. Without Streamlit installed they skip themselves.
+
+### 11.3 Hosting (Docker + Cloudflare Tunnel + Cloudflare Access)
+
+```text
+browser ─► Cloudflare Access (login) ─► Cloudflare Tunnel ─► tunnel container ─► dashboard:8501
+```
+
+The hostname, server and tunnel ID below are this deployment's values (`agentic-dashboard.praponb.com`, `prapon@192.168.1.49`); replace them for your own. Order matters: **create the Access application before the DNS record**, so the hostname is never reachable without a login.
+
+1. **Access:** Cloudflare Zero Trust → Access → Applications → Self-hosted, destination `<hostname>`, policy *Allow* with *Include → Emails = <you>*.
+2. **Tunnel and DNS** (from a machine where `cloudflared tunnel login` was run):
+   ```bash
+   cloudflared tunnel create --credentials-file deploy/cloudflared/<id>.json agentic-dashboard
+   cloudflared tunnel --config deploy/cloudflared/config.yml route dns <id> <hostname>
+   ```
+   Put the ID into `deploy/cloudflared/config.yml`. Keep the credentials file out of git. Always pass `--config` and the ID: if `~/.cloudflared/config.yml` names another tunnel, `route dns <name> <host>` routes to *that* tunnel.
+3. **Deploy:** `deploy/deploy.sh` copies the project to the server (no venv, data or secrets), sends the credentials file with mode 600, builds the image and starts both containers. Re-run it to update.
+
+**`Dockerfile.dashboard`**
+
+```dockerfile
+# Sales dashboard image (agentic-dashboard.praponb.com).
+#
+# Stage 1 builds the warehouse: it generates the mock data lake and runs `dbt build` on the
+# committed models, so the image build FAILS if any dbt test fails.
+# Stage 2 runs Streamlit as a non-root user with only the built warehouse.duckdb (read-only).
+#
+#   docker build -f Dockerfile.dashboard -t agentic-dashboard .
+#   (normally via deploy/docker-compose.yml)
+
+FROM ghcr.io/astral-sh/uv:0.11.16 AS uv
+
+FROM python:3.12.13-slim AS builder
+COPY --from=uv /uv /usr/local/bin/uv
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    DO_NOT_TRACK=1 \
+    DBT_SEND_ANONYMOUS_USAGE_STATS=false
+WORKDIR /app
+
+# Dependencies first (cached until pyproject.toml / uv.lock change).
+COPY pyproject.toml uv.lock .python-version ./
+RUN uv sync --frozen --no-dev --group dashboard
+
+# Build the warehouse from the committed dbt project.
+COPY dbt_project.yml profiles.yml generate_mock_lake.py ./
+COPY macros/ macros/
+COPY models/ models/
+COPY data_tests/ data_tests/
+RUN /app/.venv/bin/python generate_mock_lake.py \
+ && DUCKDB_PATH=/app/warehouse.duckdb /app/.venv/bin/dbt build --profiles-dir . \
+ && /app/.venv/bin/python -c "import duckdb; c = duckdb.connect('/app/warehouse.duckdb', read_only=True); \
+print('marts tables:', [r[0] for r in c.execute(\"select table_name from duckdb_tables() where schema_name = 'marts' order by 1\").fetchall()])"
+
+
+FROM python:3.12.13-slim AS runtime
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin dashboard
+WORKDIR /app
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder --chmod=444 /app/warehouse.duckdb /app/warehouse.duckdb
+COPY dashboard/ dashboard/
+COPY .streamlit/ .streamlit/
+
+ENV PATH=/app/.venv/bin:$PATH \
+    HOME=/tmp \
+    TZ=Asia/Bangkok \
+    PYTHONDONTWRITEBYTECODE=1 \
+    DASHBOARD_DUCKDB_PATH=/app/warehouse.duckdb \
+    STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
+    STREAMLIT_SERVER_PORT=8501 \
+    STREAMLIT_BROWSER_SERVER_ADDRESS=agentic-dashboard.praponb.com \
+    STREAMLIT_BROWSER_SERVER_PORT=443 \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+
+USER 10001
+EXPOSE 8501
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=4).read() == b'ok' else 1)"]
+CMD ["streamlit", "run", "dashboard/app.py"]
+```
+
+**`.dockerignore`**
+
+```text
+# Keep the build context small and free of local data and secrets.
+.venv/
+**/__pycache__/
+.pytest_cache/
+target/
+logs/
+dbt_packages/
+data_lake/
+warehouse.duckdb
+warehouse.duckdb.wal
+.env
+docker/
+deploy/
+.mcp.json
+.user.yml
+tests/
+```
+
+**`deploy/docker-compose.yml`**
+
+```yaml
+name: agentic-dashboard
+
+# Sales dashboard at https://agentic-dashboard.praponb.com
+#   dashboard: Streamlit (image builds the warehouse with dbt; see ../Dockerfile.dashboard)
+#   tunnel:    dedicated Cloudflare Tunnel -> http://dashboard:8501 (no inbound ports needed)
+# Cloudflare Access (login) protects the hostname; the app itself has no row-level security.
+# Deploy from the Mac with deploy/deploy.sh. deploy/.env holds HOST_UID/HOST_GID (written by it).
+
+services:
+  dashboard:
+    build:
+      context: ..
+      dockerfile: Dockerfile.dashboard
+    image: agentic-dashboard:latest
+    ports:
+      - "127.0.0.1:8502:8501"   # on-server checks only (8501 is used by another app)
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.0
+    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
+    user: "${HOST_UID:?run deploy/deploy.sh}:${HOST_GID:?run deploy/deploy.sh}"  # reads the 600-mode credentials file
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    restart: unless-stopped
+```
+
+**`deploy/cloudflared/config.yml`**
+
+```yaml
+# Cloudflare Tunnel "agentic-dashboard" (runs in the `tunnel` service of deploy/docker-compose.yml).
+# The tunnel ID is not a secret. The credentials file <ID>.json is git-ignored and copied to
+# the server by deploy/deploy.sh with mode 600.
+# Cloudflare Access app "agentic-dashboard" (policy "Owner only") protects this hostname.
+tunnel: f0316847-fd31-462f-9306-4f0dfb354175
+credentials-file: /etc/cloudflared/f0316847-fd31-462f-9306-4f0dfb354175.json
+no-autoupdate: true
+
+ingress:
+  - hostname: agentic-dashboard.praponb.com
+    service: http://dashboard:8501
+  - service: http_status:404
+```
+
+**`deploy/deploy.sh`**
+
+```bash
+#!/usr/bin/env bash
+# Deploy the sales dashboard to the Ubuntu server and (re)start it.
+#
+#   agentic_analytics_demo/deploy/deploy.sh            # default host prapon@192.168.1.49
+#   DEPLOY_HOST=user@host deploy/deploy.sh
+#
+# Copies the project (no local data, venv or secrets) to ~/agentic-dashboard on the server,
+# sends the tunnel credentials file with mode 600, then builds and starts the containers.
+# The image build runs `dbt build`, so a failing dbt test stops the deploy.
+set -euo pipefail
+
+HOST="${DEPLOY_HOST:-prapon@192.168.1.49}"
+REMOTE_DIR="${DEPLOY_DIR:-agentic-dashboard}"
+PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
+CONFIG="$PROJECT/deploy/cloudflared/config.yml"
+
+TUNNEL_ID="$(awk '/^tunnel:/ {print $2}' "$CONFIG")"
+CREDS="$PROJECT/deploy/cloudflared/$TUNNEL_ID.json"
+[ -f "$CREDS" ] || CREDS="$HOME/.cloudflared/$TUNNEL_ID.json"
+[ -f "$CREDS" ] || { echo "Tunnel credentials $TUNNEL_ID.json not found (deploy/cloudflared/ or ~/.cloudflared/)." >&2; exit 1; }
+
+echo "==> Copying project to $HOST:~/$REMOTE_DIR"
+rsync -az --delete \
+  --exclude .venv/ --exclude '__pycache__/' --exclude .pytest_cache/ --exclude target/ \
+  --exclude logs/ --exclude dbt_packages/ --exclude data_lake/ --exclude 'warehouse.duckdb*' \
+  --exclude .env --exclude docker/.env --exclude .mcp.json --exclude .user.yml \
+  --exclude 'deploy/.env' --exclude 'deploy/cloudflared/*.json' \
+  "$PROJECT/" "$HOST:$REMOTE_DIR/"
+
+echo "==> Sending tunnel credentials (mode 600)"
+ssh "$HOST" "umask 077 && cat > $REMOTE_DIR/deploy/cloudflared/$TUNNEL_ID.json && chmod 600 $REMOTE_DIR/deploy/cloudflared/$TUNNEL_ID.json" < "$CREDS"
+
+echo "==> Building and starting containers (runs dbt build; first run takes a few minutes)"
+ssh "$HOST" "cd $REMOTE_DIR/deploy \
+  && printf 'HOST_UID=%s\nHOST_GID=%s\n' \"\$(id -u)\" \"\$(id -g)\" > .env \
+  && docker compose up -d --build --remove-orphans \
+  && for i in \$(seq 1 30); do \
+       [ \"\$(docker inspect -f '{{.State.Health.Status}}' agentic-dashboard-dashboard-1 2>/dev/null)\" = healthy ] && break; sleep 2; \
+     done \
+  && docker compose ps --format '{{.Service}}: {{.State}} {{.Status}}' \
+  && echo -n 'health: ' && curl -s http://127.0.0.1:8502/_stcore/health && echo"
+```
+
+**Checks after deploy:**
+- On the server: `docker compose ps` shows the dashboard as `healthy`; `curl -s 127.0.0.1:8502/_stcore/health` prints `ok`; `docker compose logs tunnel` shows 4 *Registered tunnel connection* lines.
+- Without a login, `curl -sI https://<hostname>/_stcore/health` returns `302` to `<team>.cloudflareaccess.com`, never `ok`.
+- After logging in, the page shows the Section 10 step 8 figures.
+
+---
+
+## 12. Known limitations
 
 - **MCP SDK 2.x:** this server targets the 1.x API (`mcp.server.fastmcp`). Moving to 2.x means migrating to `mcp.server.mcpserver.MCPServer`.
 - **Python:** verified on 3.12 and 3.11; `requires-python` is capped at `<3.13` until the suite is run on newer versions.
@@ -3205,3 +4024,5 @@ Run these steps in order from the project root.
 - **Unprotected cubes:** `Courses` is not filtered by RLS (the course list is not sensitive). Add a cube to `RLS_MEMBERS` in `cube.js` if it must be filtered.
 - **Direct Postgres access bypasses RLS:** Postgres is published on `127.0.0.1:5432` for the publish script. Anyone using that port reads all rows.
 - **Enterprise stack tested on one machine:** Docker 29.9.3 on macOS (arm64). Re-run `check_enterprise_stack.py` after upgrading image tags.
+- **Dashboard has no RLS:** the Section 11 page shows every row to whoever can open it. Its only protection when hosted is the Cloudflare Access login.
+- **Hosted dashboard data is rebuilt per deploy:** the image builds the mock lake and warehouse at build time, so the hosted page changes only when `deploy/deploy.sh` runs. Pointing it at real data needs a volume with a warehouse file and a refresh schedule instead.
