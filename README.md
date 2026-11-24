@@ -1,5 +1,7 @@
 # Agentic Analytics (dbt + DuckDB + FastMCP)
 
+[![Tests](https://github.com/praponb/Agentic-Analytics/actions/workflows/tests.yml/badge.svg)](https://github.com/praponb/Agentic-Analytics/actions/workflows/tests.yml)
+
 An open-source blueprint for "chat with your data" and AI-assisted data modelling, without Power BI or Microsoft Fabric. An AI client such as Claude Code or Claude Desktop talks to an MCP server that can explore a local data lake, query a DuckDB warehouse, scaffold dbt models and run dbt tests. An optional Docker stack (Postgres, Cube, Metabase) adds a semantic layer with row-level security for dashboards.
 
 ## What's in this repo
@@ -14,7 +16,7 @@ An open-source blueprint for "chat with your data" and AI-assisted data modellin
 
 | Part | Status |
 |---|---|
-| Local core: dbt + DuckDB + MCP server | Tested. `pytest` 46/46 on DuckDB 2.0.1, 1.4.4 and 1.3.2 with Python 3.12; `dbt build` 66/66; MCP protocol tested over STDIO. |
+| Local core: dbt + DuckDB + MCP server | Tested. `pytest` 46/46 on DuckDB 2.0.1, 1.4.4 and 1.3.2 with Python 3.12, and on Python 3.11; `dbt build` 66/66; MCP protocol tested over STDIO. GitHub Actions re-runs this on every push (see below). |
 | Enterprise stack: Postgres + Cube + Metabase | Tested live on Docker (macOS, arm64) in both dev and production mode. Row-level security checked through the Cube REST API, the Cube SQL API and Metabase. |
 
 ## Quick start (local core)
@@ -45,6 +47,12 @@ uv run python scripts/check_enterprise_stack.py     # expect "ALL CHECKS PASSED"
 ```
 
 Services listen on `127.0.0.1` only: Metabase on port 3000, Cube on 4000 (REST and Playground) and 15432 (SQL API).
+
+## Continuous integration
+
+[`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs on every push to `main`, on pull requests and on demand:
+- **pytest:** the full suite on Ubuntu with Python 3.12 + DuckDB 2.0.1, 1.4.4 and 1.3.2, and Python 3.11 + DuckDB 2.0.1.
+- **Docker stack (static):** `docker compose config` and the `cube.js` row-level security unit checks. CI does not start the containers; run `scripts/check_enterprise_stack.py` locally for the live check.
 
 ## Security in one paragraph
 

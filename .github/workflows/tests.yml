@@ -1,0 +1,81 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    # dbt + DuckDB + MCP server: the 46-test pytest suite (tests/test_mcp_server.py).
+    # The suite copies the project to a temp dir and generates its own sample data.
+    name: pytest (Python ${{ matrix.python }}, DuckDB ${{ matrix.duckdb }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { python: "3.12", duckdb: "locked" }
+          - { python: "3.12", duckdb: "1.4.4" }
+          - { python: "3.12", duckdb: "1.3.2" }   # oldest supported (needs allowed_directories)
+          - { python: "3.11", duckdb: "locked" }
+    defaults:
+      run:
+        working-directory: reference/agentic_analytics_demo
+    env:
+      UV_PYTHON: ${{ matrix.python }}  # overrides .python-version
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.11.16"
+          enable-cache: true
+          cache-dependency-glob: reference/agentic_analytics_demo/uv.lock
+
+      - name: Install dependencies from uv.lock
+        run: uv sync --frozen
+
+      - name: Swap in DuckDB ${{ matrix.duckdb }}
+        if: matrix.duckdb != 'locked'
+        run: uv pip install "duckdb==${{ matrix.duckdb }}"
+
+      - name: Show versions
+        run: uv run --no-sync python -c "import sys, duckdb, dbt.version, importlib.metadata as m; print(sys.version.split()[0], 'duckdb', duckdb.__version__, 'dbt-core', dbt.version.__version__, 'mcp', m.version('mcp'))"
+
+      - name: Run tests
+        run: uv run --no-sync pytest -v -p no:cacheprovider
+
+  enterprise-static:
+    # Optional Docker stack: validated without starting containers. Run the live checks with
+    # scripts/check_enterprise_stack.py on a machine with Docker (see Section 7 of the spec).
+    name: Docker stack (static checks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: reference/agentic_analytics_demo
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Validate docker-compose.yml against .env.example
+        run: docker compose --env-file docker/.env.example -f docker/docker-compose.yml config --quiet
+
+      - name: cube.js syntax
+        run: node --check docker/cube_schema/cube.js
+
+      - name: cube.js row-level security unit checks
+        run: node docker/cube_rls_unit_check.js
