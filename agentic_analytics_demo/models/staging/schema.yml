@@ -1,0 +1,81 @@
+version: 2
+models:
+- name: stg_data_lake__raw_sales_2026
+  description: 'Auto-profiled dbt model: stg_data_lake__raw_sales_2026'
+  columns:
+  - name: order_id
+    description: Column (VARCHAR)
+    data_tests:
+    - unique
+    - not_null
+  - name: sale_date
+    description: Column (DATE)
+    data_tests:
+    - not_null
+  - name: rep_id
+    description: Column (VARCHAR)
+    data_tests:
+    - not_null
+  - name: rep_name
+    description: Column (VARCHAR)
+    data_tests:
+    - not_null
+    - accepted_values:
+        values:
+        - Boonsom
+        - Napa
+        - Somchai
+        - Wipa
+        config:
+          severity: warn
+  - name: region
+    description: Column (VARCHAR)
+    data_tests:
+    - not_null
+    - accepted_values:
+        values:
+        - Bangkok
+        - Central
+        - East
+        - North
+        - Northeast
+        - South
+        config:
+          severity: warn
+  - name: course_name
+    description: Column (VARCHAR)
+    data_tests:
+    - not_null
+    - accepted_values:
+        values:
+        - AI & Copilot
+        - Digital Marketing
+        - Excel Advanced
+        - Microsoft Fabric
+        - Power BI Essentials
+        - Python for Data
+        config:
+          severity: warn
+  - name: channel_type
+    description: Column (VARCHAR)
+    data_tests:
+    - not_null
+    - accepted_values:
+        values:
+        - Hybrid
+        - In-house
+        - Public
+        config:
+          severity: warn
+  - name: quantity
+    description: Column (INTEGER)
+    data_tests:
+    - not_null
+  - name: unit_price
+    description: Column (DECIMAL(6,1))
+    data_tests:
+    - not_null
+  - name: amount
+    description: Column (DECIMAL(6,1))
+    data_tests:
+    - not_null

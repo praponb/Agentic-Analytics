@@ -1,0 +1,43 @@
+version: 2
+sources:
+- name: data_lake
+  description: Raw Parquet and CSV files from data_lake/
+  tables:
+  - name: raw_sales_2026
+    description: Auto-registered from data_lake/raw_sales_2026.parquet
+    meta:
+      external_location: read_parquet('data_lake/raw_sales_2026.parquet')
+    columns:
+    - name: Order ID
+      description: 'Source type: VARCHAR'
+    - name: sale_date
+      description: 'Source type: DATE'
+    - name: rep_id
+      description: 'Source type: VARCHAR'
+    - name: rep_name
+      description: 'Source type: VARCHAR'
+    - name: region
+      description: 'Source type: VARCHAR'
+    - name: course_name
+      description: 'Source type: VARCHAR'
+    - name: channel_type
+      description: 'Source type: VARCHAR'
+    - name: quantity
+      description: 'Source type: INTEGER'
+    - name: unit_price
+      description: 'Source type: DECIMAL(6,1)'
+    - name: amount
+      description: 'Source type: DECIMAL(6,1)'
+  - name: sales_targets
+    description: Auto-registered from data_lake/sales_targets.csv
+    meta:
+      external_location: read_csv_auto('data_lake/sales_targets.csv')
+    columns:
+    - name: rep_id
+      description: 'Source type: VARCHAR'
+    - name: rep_name
+      description: 'Source type: VARCHAR'
+    - name: fiscal_year
+      description: 'Source type: BIGINT'
+    - name: annual_target
+      description: 'Source type: DOUBLE'

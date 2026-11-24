@@ -1,0 +1,26 @@
+name: 'agentic_analytics_demo'
+version: '1.1.0'
+config-version: 2
+
+profile: 'agentic_analytics_demo'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+# dbt singular tests live in data_tests/; pytest owns tests/
+test-paths: ["data_tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  agentic_analytics_demo:
+    staging:
+      +schema: staging
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table

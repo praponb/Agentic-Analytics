@@ -1,0 +1,98 @@
+version: 2
+models:
+- name: dim_date
+  description: Date dimension (2025-01-01 to 2027-12-31); fiscal year starts in month
+    10, named by its end year.
+  columns:
+  - name: date_key
+    description: Surrogate key in YYYYMMDD integer format
+    data_tests:
+    - unique
+    - not_null
+  - name: date_day
+    description: 'Calendar date (grain: 1 row per day)'
+    data_tests:
+    - unique
+    - not_null
+  - name: calendar_year
+    description: Calendar year (e.g., 2026)
+    data_tests:
+    - not_null
+  - name: calendar_quarter
+    description: Calendar quarter (1 to 4)
+    data_tests:
+    - not_null
+    - &id001
+      accepted_values:
+        values:
+        - 1
+        - 2
+        - 3
+        - 4
+        quote: false
+  - name: calendar_quarter_name
+    description: Calendar quarter label (Q1 to Q4)
+    data_tests:
+    - not_null
+  - name: month_number
+    description: Calendar month number (1 to 12)
+    data_tests:
+    - not_null
+  - name: month_name
+    description: Full English month name
+    data_tests:
+    - not_null
+  - name: month_short_name
+    description: Abbreviated month name (Jan, Feb, ...)
+    data_tests:
+    - not_null
+  - name: year_month
+    description: Year-Month string (YYYY-MM)
+    data_tests:
+    - not_null
+  - name: day_of_month
+    description: Day of month (1 to 31)
+    data_tests:
+    - not_null
+  - name: day_of_week
+    description: ISO day of week (1=Monday to 7=Sunday)
+    data_tests:
+    - not_null
+  - name: day_name
+    description: Full day name (Monday to Sunday)
+    data_tests:
+    - not_null
+  - name: day_short_name
+    description: Abbreviated day name (Mon to Sun)
+    data_tests:
+    - not_null
+  - name: is_weekend
+    description: True if Saturday or Sunday
+    data_tests:
+    - not_null
+  - name: fiscal_year
+    description: Fiscal year integer, named after the year it ends in (starts in month
+      10; months >= 10 map to calendar_year + 1)
+    data_tests:
+    - not_null
+  - name: fiscal_year_label
+    description: Fiscal year label (e.g., FY2026)
+    data_tests:
+    - not_null
+  - name: fiscal_quarter
+    description: Fiscal quarter number (1 to 4, Q1 starts in month 10)
+    data_tests:
+    - not_null
+    - *id001
+  - name: fiscal_quarter_label
+    description: Fiscal year and quarter label (e.g., FY2026-Q1)
+    data_tests:
+    - not_null
+  - name: fiscal_month_number
+    description: Fiscal month sequence (1 to 12, where 1 = month 10)
+    data_tests:
+    - not_null
+  - name: fiscal_year_month
+    description: Fiscal year and month label (e.g., FY2026-M01)
+    data_tests:
+    - not_null

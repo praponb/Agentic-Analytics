@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "dbt-duckdb": {
+      "command": "<ABS_PROJECT_DIR>/.venv/bin/python",
+      "args": ["<ABS_PROJECT_DIR>/mcp_server/dbt_mcp_server.py"],
+      "env": {
+        "DBT_PROJECT_DIR": "<ABS_PROJECT_DIR>",
+        "DBT_PROFILES_DIR": "<ABS_PROJECT_DIR>",
+        "DBT_BIN": "<ABS_PROJECT_DIR>/.venv/bin/dbt",
+        "DUCKDB_PATH": "<ABS_PROJECT_DIR>/warehouse.duckdb",
+        "DATA_LAKE_DIR": "<ABS_PROJECT_DIR>/data_lake",
+        "MCP_QUERY_TIMEOUT_SEC": "60",
+        "DBT_TIMEOUT_SEC": "300"
+      }
+    }
+  }
+}

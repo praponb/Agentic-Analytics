@@ -1,0 +1,11 @@
+agentic_analytics_demo:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      # The MCP server always injects an absolute DUCKDB_PATH. The relative default only
+      # applies when you run dbt by hand, so run it from the project root.
+      path: "{{ env_var('DUCKDB_PATH', 'warehouse.duckdb') }}"
+      threads: 4
+      settings:
+        memory_limit: '2GB'

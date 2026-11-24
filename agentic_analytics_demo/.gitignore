@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+.pytest_cache/
+target/
+dbt_packages/
+logs/
+warehouse.duckdb
+warehouse.duckdb.wal
+data_lake/
+.env
+docker/.env
+.mcp.json
+docker/cube_schema/.cubestore/
