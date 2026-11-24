@@ -1,44 +1,49 @@
 # Sales dashboard image (agentic-dashboard.praponb.com).
 #
-# Stage 1 builds the warehouse: it generates the mock data lake and runs `dbt build` on the
-# committed models, so the image build FAILS if any dbt test fails.
-# Stage 2 runs Streamlit as a non-root user with only the built warehouse.duckdb (read-only).
+# Stage "warehouse" builds the data: it generates the mock data lake and runs `dbt build` on
+# the committed models, so the image build FAILS if any dbt test fails. dbt stays in this stage.
+# Stage "deps" installs only the `dashboard` dependency group (Streamlit + DuckDB, no dbt/MCP).
+# Stage "runtime" runs Streamlit as a non-root user with the built warehouse.duckdb (read-only).
 #
 #   docker build -f Dockerfile.dashboard -t agentic-dashboard .
 #   (normally via deploy/docker-compose.yml)
 
 FROM ghcr.io/astral-sh/uv:0.11.16 AS uv
 
-FROM python:3.12.13-slim AS builder
+FROM python:3.12.13-slim AS base
 COPY --from=uv /uv /usr/local/bin/uv
-ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
-    UV_PYTHON_DOWNLOADS=never \
+ENV UV_PYTHON_DOWNLOADS=never \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     DO_NOT_TRACK=1 \
     DBT_SEND_ANONYMOUS_USAGE_STATS=false
 WORKDIR /app
-
-# Dependencies first (cached until pyproject.toml / uv.lock change).
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-dev --group dashboard
 
-# Build the warehouse from the committed dbt project.
+
+FROM base AS warehouse
+# Full project environment (dbt), cached until pyproject.toml / uv.lock change.
+RUN UV_PROJECT_ENVIRONMENT=/opt/dbt-venv uv sync --frozen --no-dev
 COPY dbt_project.yml profiles.yml generate_mock_lake.py ./
 COPY macros/ macros/
 COPY models/ models/
 COPY data_tests/ data_tests/
-RUN /app/.venv/bin/python generate_mock_lake.py \
- && DUCKDB_PATH=/app/warehouse.duckdb /app/.venv/bin/dbt build --profiles-dir . \
- && /app/.venv/bin/python -c "import duckdb; c = duckdb.connect('/app/warehouse.duckdb', read_only=True); \
+RUN /opt/dbt-venv/bin/python generate_mock_lake.py \
+ && DUCKDB_PATH=/app/warehouse.duckdb /opt/dbt-venv/bin/dbt build --profiles-dir . \
+ && /opt/dbt-venv/bin/python -c "import duckdb; c = duckdb.connect('/app/warehouse.duckdb', read_only=True); \
 print('marts tables:', [r[0] for r in c.execute(\"select table_name from duckdb_tables() where schema_name = 'marts' order by 1\").fetchall()])"
+
+
+FROM base AS deps
+# Dashboard-only environment: same locked versions, without dbt or the MCP server packages.
+RUN UV_PROJECT_ENVIRONMENT=/app/.venv uv sync --frozen --no-dev --only-group dashboard
 
 
 FROM python:3.12.13-slim AS runtime
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin dashboard
 WORKDIR /app
-COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder --chmod=444 /app/warehouse.duckdb /app/warehouse.duckdb
+COPY --from=deps /app/.venv /app/.venv
+COPY --from=warehouse --chmod=444 /app/warehouse.duckdb /app/warehouse.duckdb
 COPY dashboard/ dashboard/
 COPY .streamlit/ .streamlit/
 

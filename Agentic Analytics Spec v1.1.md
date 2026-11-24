@@ -14,7 +14,7 @@
 > | Local core (dbt + DuckDB + MCP server, Sections 4–6) | **Tested.** `pytest` 47/47 on DuckDB 2.0.1, 1.4.4 and 1.3.2 with Python 3.12.13, and on Python 3.11.15 (dbt-core 1.12.7, dbt-duckdb 1.11.1, mcp 1.30.0), locally and in GitHub Actions; `dbt build` 66/66; MCP protocol tested over STDIO with a real client. |
 > | Execution checklist (Section 10) | **Tested** end to end in a fresh copy. |
 > | Enterprise Docker stack (Section 7) | **Tested live** on Docker 29.9.3 (Postgres 16.16, Cube v1.8.32 + Cube Store, Metabase v0.65.6.3), from empty volumes, with `CUBEJS_DEV_MODE` both `true` and `false`: marts published to Postgres; RLS checked over Cube REST (JWT) and the SQL API; Metabase connected to the SQL API with native SQL and GUI questions filtered per user. `scripts/check_enterprise_stack.py` reproduces these checks. |
-> | Sales dashboard + hosting (Section 11, optional add-on) | **Tested.** 8 `pytest` tests (Streamlit 1.67, AppTest); checked in Chrome in light and dark mode; image built with `dbt build` 66/66 and run on Ubuntu 26.04 (Docker 29) behind a Cloudflare Tunnel and Cloudflare Access; container image build and health check run in GitHub Actions. |
+> | Sales dashboard + hosting (Section 11, optional add-on) | **Tested.** 8 `pytest` tests (Streamlit 1.67, AppTest); checked in Chrome in light and dark mode; image built with `dbt build` 66/66 (runtime image holds only Streamlit + DuckDB) and run on Ubuntu 26.04 (Docker 29) behind a Cloudflare Tunnel and Cloudflare Access; container image build and health check run in GitHub Actions. |
 
 ---
 
@@ -3226,6 +3226,8 @@ Add the optional dependency group to `pyproject.toml` and refresh the lock file 
 ```toml
 [dependency-groups]
 dashboard = [
+    # Hosted image installs only this group (uv sync --only-group dashboard), so list duckdb too.
+    "duckdb>=1.3.0,<3.0.0",
     "streamlit>=1.66,<2",
 ]
 ```
@@ -3817,45 +3819,50 @@ The hostname, server and tunnel ID below are this deployment's values (`agentic-
 ```dockerfile
 # Sales dashboard image (agentic-dashboard.praponb.com).
 #
-# Stage 1 builds the warehouse: it generates the mock data lake and runs `dbt build` on the
-# committed models, so the image build FAILS if any dbt test fails.
-# Stage 2 runs Streamlit as a non-root user with only the built warehouse.duckdb (read-only).
+# Stage "warehouse" builds the data: it generates the mock data lake and runs `dbt build` on
+# the committed models, so the image build FAILS if any dbt test fails. dbt stays in this stage.
+# Stage "deps" installs only the `dashboard` dependency group (Streamlit + DuckDB, no dbt/MCP).
+# Stage "runtime" runs Streamlit as a non-root user with the built warehouse.duckdb (read-only).
 #
 #   docker build -f Dockerfile.dashboard -t agentic-dashboard .
 #   (normally via deploy/docker-compose.yml)
 
 FROM ghcr.io/astral-sh/uv:0.11.16 AS uv
 
-FROM python:3.12.13-slim AS builder
+FROM python:3.12.13-slim AS base
 COPY --from=uv /uv /usr/local/bin/uv
-ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
-    UV_PYTHON_DOWNLOADS=never \
+ENV UV_PYTHON_DOWNLOADS=never \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     DO_NOT_TRACK=1 \
     DBT_SEND_ANONYMOUS_USAGE_STATS=false
 WORKDIR /app
-
-# Dependencies first (cached until pyproject.toml / uv.lock change).
 COPY pyproject.toml uv.lock .python-version ./
-RUN uv sync --frozen --no-dev --group dashboard
 
-# Build the warehouse from the committed dbt project.
+
+FROM base AS warehouse
+# Full project environment (dbt), cached until pyproject.toml / uv.lock change.
+RUN UV_PROJECT_ENVIRONMENT=/opt/dbt-venv uv sync --frozen --no-dev
 COPY dbt_project.yml profiles.yml generate_mock_lake.py ./
 COPY macros/ macros/
 COPY models/ models/
 COPY data_tests/ data_tests/
-RUN /app/.venv/bin/python generate_mock_lake.py \
- && DUCKDB_PATH=/app/warehouse.duckdb /app/.venv/bin/dbt build --profiles-dir . \
- && /app/.venv/bin/python -c "import duckdb; c = duckdb.connect('/app/warehouse.duckdb', read_only=True); \
+RUN /opt/dbt-venv/bin/python generate_mock_lake.py \
+ && DUCKDB_PATH=/app/warehouse.duckdb /opt/dbt-venv/bin/dbt build --profiles-dir . \
+ && /opt/dbt-venv/bin/python -c "import duckdb; c = duckdb.connect('/app/warehouse.duckdb', read_only=True); \
 print('marts tables:', [r[0] for r in c.execute(\"select table_name from duckdb_tables() where schema_name = 'marts' order by 1\").fetchall()])"
+
+
+FROM base AS deps
+# Dashboard-only environment: same locked versions, without dbt or the MCP server packages.
+RUN UV_PROJECT_ENVIRONMENT=/app/.venv uv sync --frozen --no-dev --only-group dashboard
 
 
 FROM python:3.12.13-slim AS runtime
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin dashboard
 WORKDIR /app
-COPY --from=builder /app/.venv /app/.venv
-COPY --from=builder --chmod=444 /app/warehouse.duckdb /app/warehouse.duckdb
+COPY --from=deps /app/.venv /app/.venv
+COPY --from=warehouse --chmod=444 /app/warehouse.duckdb /app/warehouse.duckdb
 COPY dashboard/ dashboard/
 COPY .streamlit/ .streamlit/
 
@@ -3926,7 +3933,7 @@ services:
     restart: unless-stopped
 
   tunnel:
-    image: cloudflare/cloudflared:2026.10.0
+    image: cloudflare/cloudflared:2026.11.2
     command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
     user: "${HOST_UID:?run deploy/deploy.sh}:${HOST_GID:?run deploy/deploy.sh}"  # reads the 600-mode credentials file
     volumes:

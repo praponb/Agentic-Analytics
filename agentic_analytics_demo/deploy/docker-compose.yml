@@ -23,7 +23,7 @@ services:
     restart: unless-stopped
 
   tunnel:
-    image: cloudflare/cloudflared:2026.10.0
+    image: cloudflare/cloudflared:2026.11.2
     command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
     user: "${HOST_UID:?run deploy/deploy.sh}:${HOST_GID:?run deploy/deploy.sh}"  # reads the 600-mode credentials file
     volumes:

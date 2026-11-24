@@ -12,6 +12,7 @@ An open-source blueprint for "chat with your data" and AI-assisted data modellin
 | [`reference/agentic_analytics_demo/`](reference/agentic_analytics_demo/) | A working copy of every file in the spec. The spec's code blocks are generated from these files, so the two always match. |
 | [`agentic_analytics_demo/`](agentic_analytics_demo/) | The project implemented from the spec (Section 10 checklist), including the dbt models the MCP tools generated, plus the sales dashboard and its hosting (see below; spec Section 11). |
 | `Agentic Analytics (dbt + DuckDB + FastMCP) Spec.docx` | The original v1.0 spec, kept for reference only. It has known blocking problems (see Section 0 of v1.1); do not implement from it. |
+| [`tools/spec/`](tools/spec/) | Generator for the v1.1 spec: `spec_template.md` (the prose) and `build_spec.py`, which embeds the project files. Edit the template or a project file, then run `python3 tools/spec/build_spec.py`; CI fails if the committed spec is out of date (`--check`). |
 
 ## Verification status
 
@@ -72,7 +73,7 @@ The hosted copy runs on the Ubuntu server `192.168.1.49` as the Docker Compose p
 browser ─► Cloudflare Access (login: "Owner only" policy) ─► Tunnel "agentic-dashboard" ─► tunnel container ─► dashboard:8501
 ```
 
-- **Image:** [`Dockerfile.dashboard`](agentic_analytics_demo/Dockerfile.dashboard). Its build stage generates the mock lake and runs `dbt build`, so **a failing dbt test fails the deploy**. The runtime stage runs Streamlit as a non-root user on a read-only filesystem with only `warehouse.duckdb`.
+- **Image:** [`Dockerfile.dashboard`](agentic_analytics_demo/Dockerfile.dashboard). Its build stage generates the mock lake and runs `dbt build`, so **a failing dbt test fails the deploy**. dbt stays in the build stage: the runtime image holds only the `dashboard` dependency group (Streamlit + DuckDB) and `warehouse.duckdb`, and runs as a non-root user on a read-only filesystem.
 - **Compose:** [`deploy/docker-compose.yml`](agentic_analytics_demo/deploy/docker-compose.yml), with the `dashboard` and `tunnel` services. The dashboard is also on `127.0.0.1:8502` on the server for checks, because 8501 is taken there.
 - **Tunnel:** [`deploy/cloudflared/config.yml`](agentic_analytics_demo/deploy/cloudflared/config.yml). The credentials file `deploy/cloudflared/<tunnel-id>.json` is git-ignored. `deploy.sh` copies it to the server with mode 600.
 - **DNS:** a proxied CNAME `agentic-dashboard` → `<tunnel-id>.cfargotunnel.com` in the `praponb.com` zone.
@@ -105,6 +106,7 @@ Remove completely: `docker compose down --rmi local` on the server, then delete 
 - **Docker stack (static):** `docker compose config` and the `cube.js` row-level security unit checks. CI does not start the containers; run `scripts/check_enterprise_stack.py` locally for the live check.
 - **Dashboard:** `agentic_analytics_demo/tests/test_dashboard.py` (8 tests: figures, filters, fiscal months, missing or locked warehouse, the app rendering headless).
 - **Dashboard image:** builds `Dockerfile.dashboard` (including `dbt build`) and checks that the container starts healthy, without the tunnel.
+- **Spec in sync:** `tools/spec/build_spec.py --check` fails if the spec was not rebuilt after a template or embedded-file change.
 
 ## Security in one paragraph
 

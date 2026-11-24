@@ -80,6 +80,17 @@ jobs:
       - name: cube.js row-level security unit checks
         run: node docker/cube_rls_unit_check.js
 
+  spec-sync:
+    # The spec embeds project files; fail if it was not rebuilt after a file or template change.
+    name: Spec in sync with sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Rebuild spec and compare
+        run: python3 tools/spec/build_spec.py --check
+
   dashboard:
     # Local Streamlit dashboard in the implemented project (agentic_analytics_demo/dashboard/).
     # The tests build their own small warehouse, so no dbt run is needed.
